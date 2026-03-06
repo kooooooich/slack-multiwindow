@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import WorkspaceSetup from '@/components/WorkspaceSetup';
 import TaskBoard from '@/components/TaskBoard';
 import WindowManager from '@/components/WindowManager';
 import { useAppStore } from '@/lib/store';
-import type { Workspace } from '@/types';
+import type { Workspace, Task } from '@/types';
 
 export default function Home() {
   const [mode, setMode] = useState<'loading' | 'setup' | 'app'>('loading');
@@ -42,6 +42,94 @@ export default function Home() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // リアルタイム更新: SSE + ポーリングフォールバック
+  const addTask = useAppStore((s) => s.addTask);
+  const updateTask = useAppStore((s) => s.updateTask);
+  const openWindow = useAppStore((s) => s.openWindow);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (mode !== 'app') return;
+
+    let eventSource: EventSource | null = null;
+    let sseConnected = false;
+
+    // SSE接続を試行
+    try {
+      eventSource = new EventSource('/api/slack/stream');
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'connected') {
+            sseConnected = true;
+            // SSE接続成功 → ポーリング停止
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+          } else if (data.type === 'task_created') {
+            const task = data.data as Task;
+            addTask(task);
+            openWindow(task.id);
+          } else if (data.type === 'task_updated') {
+            // タスク更新 → 全タスク再取得
+            refreshTasks();
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      eventSource.onerror = () => {
+        sseConnected = false;
+        // SSEが失敗した場合 → ポーリングにフォールバック
+        startPolling();
+      };
+    } catch {
+      // SSE非対応 → ポーリング
+      startPolling();
+    }
+
+    function startPolling() {
+      if (pollingRef.current) return;
+      pollingRef.current = setInterval(() => {
+        refreshTasks();
+      }, 5000);
+    }
+
+    async function refreshTasks() {
+      try {
+        const res = await fetch('/api/tasks');
+        if (res.ok) {
+          const tasks = await res.json();
+          if (Array.isArray(tasks)) {
+            // 新しいタスクを検出してウィンドウを開く
+            const currentIds = useAppStore.getState().tasks.map((t: Task) => t.id);
+            for (const task of tasks) {
+              if (!currentIds.includes(task.id) && task.status === 'open') {
+                openWindow(task.id);
+              }
+            }
+            setTasks(tasks);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // SSE非対応の場合の保険としてポーリングも開始（SSE接続後に停止）
+    if (!sseConnected) {
+      startPolling();
+    }
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [mode, addTask, updateTask, openWindow, setTasks]);
 
   if (mode === 'loading') {
     return (
