@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
+import MessageComposer from './MessageComposer';
 import type { Task } from '@/types';
 
 interface ChatWindowProps {
@@ -18,11 +19,19 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
   const updateWindowSize = useAppStore((s) => s.updateWindowSize);
 
   const windowRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState(task.windowPosition);
   const [size, setSize] = useState(task.windowSize);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [replyText, setReplyText] = useState('');
   const dragOffset = useRef({ x: 0, y: 0 });
+
+  // 新しいメッセージが来たらスクロール
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [task.threadMessages.length]);
 
   // ドラッグ開始
   const handleDragStart = useCallback(
@@ -59,11 +68,10 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
 
     const handleMouseMove = (e: MouseEvent) => {
       if (isDragging) {
-        const newPos = {
+        setPos({
           x: e.clientX - dragOffset.current.x,
           y: e.clientY - dragOffset.current.y,
-        };
-        setPos(newPos);
+        });
       } else if (isResizing) {
         const dx = e.clientX - dragOffset.current.x;
         const dy = e.clientY - dragOffset.current.y;
@@ -100,12 +108,14 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
     };
   }, [isDragging, isResizing, task.id, updateWindowPosition, updateWindowSize]);
 
+  const messages = task.threadMessages.length > 0
+    ? task.threadMessages
+    : [task.triggerMessage];
+
   return (
     <div
       ref={windowRef}
-      className={`absolute flex flex-col rounded-lg overflow-hidden ${
-        isFocused ? 'border-[#4A9EFF]' : 'border-white/10'
-      }`}
+      className="absolute flex flex-col rounded-lg overflow-hidden"
       style={{
         left: pos.x,
         top: pos.y,
@@ -115,7 +125,9 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         border: '1px solid',
         borderColor: isFocused ? '#4A9EFF' : 'rgba(255,255,255,0.1)',
         backdropFilter: 'blur(12px)',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        boxShadow: isFocused
+          ? '0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(74,158,255,0.3)'
+          : '0 20px 60px rgba(0,0,0,0.5)',
         background: '#1E2235',
       }}
       onMouseDown={() => focusWindow(task.id)}
@@ -126,9 +138,11 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         onMouseDown={handleDragStart}
       >
         <div className="flex-1 text-xs text-gray-300 truncate">
-          <span className="text-gray-500 mr-1">[{task.workspaceId.slice(0, 6)}]</span>
           <span className="text-[#4A9EFF]">#</span>
           {task.channelName}
+          {task.status === 'completed' && (
+            <span className="ml-2 text-[10px] text-[#2ECC71]">&#10003; 完了</span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -148,57 +162,49 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         </div>
       </div>
 
-      {/* メッセージ表示エリア（Step 7で完全実装） */}
+      {/* メッセージ表示エリア */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {task.threadMessages.length > 0 ? (
-          task.threadMessages.map((msg) => (
-            <div key={msg.id} className="flex gap-2">
-              <div className="w-7 h-7 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0">
-                {msg.userName.slice(0, 2).toUpperCase()}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-xs font-semibold text-gray-300">
-                    {msg.userName}
-                  </span>
-                  <span className="text-[10px] text-gray-600">
-                    {formatSlackTs(msg.ts)}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-400 mt-0.5 break-words whitespace-pre-wrap">
-                  {msg.text}
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="flex gap-2">
-            <div className="w-7 h-7 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0">
-              {task.triggerMessage.userName.slice(0, 2).toUpperCase()}
+        {messages.map((msg, i) => (
+          <div key={msg.id || i} className="flex gap-2">
+            <div className="w-7 h-7 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0 mt-0.5">
+              {(msg.userName || '??').slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2">
                 <span className="text-xs font-semibold text-gray-300">
-                  {task.triggerMessage.userName}
+                  {msg.userName}
                 </span>
                 <span className="text-[10px] text-gray-600">
-                  {formatSlackTs(task.triggerMessage.ts)}
+                  {formatSlackTs(msg.ts)}
                 </span>
               </div>
               <div className="text-xs text-gray-400 mt-0.5 break-words whitespace-pre-wrap">
-                {task.triggerMessage.text}
+                {formatMessageText(msg.text)}
               </div>
             </div>
           </div>
-        )}
+        ))}
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* 返信エリアプレースホルダー（Step 7で実装） */}
-      <div className="border-t border-white/5 p-2 shrink-0">
-        <div className="text-[10px] text-gray-600 text-center py-2">
-          返信機能（Step 7で実装）
+      {/* 返信エリア */}
+      {task.status === 'open' && (
+        <MessageComposer
+          task={task}
+          onAiAssist={() => setShowAiPanel(!showAiPanel)}
+          replyText={replyText}
+          setReplyText={setReplyText}
+        />
+      )}
+
+      {/* AI補助パネル（Step 8で実装） */}
+      {showAiPanel && task.status === 'open' && (
+        <div className="border-t border-white/5 p-3 bg-[#161929] shrink-0">
+          <div className="text-[10px] text-gray-500 text-center py-2">
+            AI補助パネル（Step 8で実装）
+          </div>
         </div>
-      </div>
+      )}
 
       {/* リサイズハンドル */}
       <div
@@ -229,4 +235,9 @@ function formatSlackTs(ts: string): string {
   } catch {
     return '';
   }
+}
+
+function formatMessageText(text: string): string {
+  // Slackのメンション形式 <@U12345> をユーザー名表示に変換（簡易版）
+  return text.replace(/<@([A-Z0-9]+)>/g, '@user');
 }
