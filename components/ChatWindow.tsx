@@ -18,6 +18,8 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
   const focusWindow = useAppStore((s) => s.focusWindow);
   const updateWindowPosition = useAppStore((s) => s.updateWindowPosition);
   const updateWindowSize = useAppStore((s) => s.updateWindowSize);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const wsName = workspaces.find((w) => w.id === task.workspaceId)?.name || '';
 
   const windowRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -139,10 +141,13 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         onMouseDown={handleDragStart}
       >
         <div className="flex-1 text-xs text-gray-300 truncate">
+          {wsName && (
+            <span className="text-gray-500 mr-1.5">{wsName}</span>
+          )}
           <span className="text-[#4A9EFF]">#</span>
           {task.channelName}
           {task.status === 'completed' && (
-            <span className="ml-2 text-[10px] text-[#2ECC71]">&#10003; 完了</span>
+            <span className="ml-2 text-[10px] text-[#2ECC71] bg-[#2ECC71]/10 px-1.5 py-0.5 rounded">&#10003; 完了</span>
           )}
         </div>
         <div className="flex items-center gap-1">

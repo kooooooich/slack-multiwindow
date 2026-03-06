@@ -179,11 +179,22 @@ function Header({
   onChangeWorkspace: (id: string) => void;
   onOpenSettings: () => void;
 }) {
+  const openCount = useAppStore((s) => s.tasks.filter((t) => t.status === 'open').length);
+
   return (
     <header className="h-11 bg-[#1A1D27] border-b border-white/10 flex items-center px-4 shrink-0">
-      <h1 className="text-sm font-bold text-white mr-6 tracking-wide">
-        Slack Multi-Window
-      </h1>
+      {/* ロゴ + 接続インジケーター */}
+      <div className="flex items-center gap-2 mr-6">
+        <div className="w-2 h-2 rounded-full bg-[#2ECC71] animate-pulse-dot" title="接続中" />
+        <h1 className="text-sm font-bold text-white tracking-wide">
+          Slack Multi-Window
+        </h1>
+        {openCount > 0 && (
+          <span className="text-[10px] bg-[#E74C3C] text-white px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+            {openCount}
+          </span>
+        )}
+      </div>
 
       {/* ワークスペース切り替え */}
       {workspaces.length > 1 && (
@@ -213,7 +224,7 @@ function Header({
       <div className="ml-auto">
         <button
           onClick={onOpenSettings}
-          className="text-gray-500 hover:text-gray-300 transition p-1"
+          className="text-gray-500 hover:text-gray-300 transition p-1 rounded hover:bg-white/5"
           title="設定"
         >
           <svg

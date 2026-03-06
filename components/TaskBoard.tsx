@@ -35,7 +35,7 @@ export default function TaskBoard() {
     text.length > len ? text.slice(0, len) + '...' : text;
 
   return (
-    <div className="w-64 bg-[#1A1D27] border-r border-white/10 flex flex-col h-full">
+    <div className="w-64 bg-[#1A1D27] border-r border-white/10 flex flex-col h-full max-md:w-48 max-sm:hidden">
       {/* 未完了タスク */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-3 py-2 flex items-center justify-between border-b border-white/5">
