@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllWorkspaces, createWorkspace, deleteWorkspace } from '@/lib/db';
+import { getAllWorkspaces, getWorkspacesByUserId, createWorkspace, deleteWorkspace } from '@/lib/db';
+import { auth, getAuthMode } from '@/lib/auth';
 import { WebClient } from '@slack/web-api';
 import { v4 as uuidv4 } from 'uuid';
 
+async function getSessionUserId(): Promise<string | null> {
+  if (getAuthMode() !== 'google') return null;
+  const session = await auth();
+  return (session as unknown as Record<string, unknown>)?.userId as string | null;
+}
+
 export async function GET() {
   try {
-    const workspaces = getAllWorkspaces();
+    const userId = await getSessionUserId();
+    const workspaces = userId ? getWorkspacesByUserId(userId) : getAllWorkspaces();
     // トークンを隠してレスポンス
     const safe = workspaces.map((ws) => ({
       ...ws,
@@ -46,6 +54,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const userId = await getSessionUserId();
+
     const workspace = createWorkspace({
       id: uuidv4(),
       name,
@@ -54,6 +64,7 @@ export async function POST(req: NextRequest) {
       appToken: appToken || undefined,
       userToken: userToken || undefined,
       targetUserId: targetUserId || undefined,
+      userId: userId || undefined,
       teamId,
       addedAt: new Date().toISOString(),
       isActive: true,

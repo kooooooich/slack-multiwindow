@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllTasks, updateTask, deleteTask } from '@/lib/db';
+import { getAllTasks, getTasksByUserId, updateTask, deleteTask } from '@/lib/db';
+import { auth, getAuthMode } from '@/lib/auth';
 
 export async function GET() {
   try {
-    const tasks = getAllTasks();
+    let tasks;
+    if (getAuthMode() === 'google') {
+      const session = await auth();
+      const userId = (session as unknown as Record<string, unknown>)?.userId as string | null;
+      tasks = userId ? getTasksByUserId(userId) : getAllTasks();
+    } else {
+      tasks = getAllTasks();
+    }
     return NextResponse.json(tasks);
   } catch (error) {
     console.error('Failed to get tasks:', error);

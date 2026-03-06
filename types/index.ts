@@ -1,3 +1,23 @@
+export interface User {
+  id: string;
+  googleId: string;
+  email: string;
+  name: string;
+  avatarUrl: string;
+  createdAt: string;
+  lastLoginAt: string;
+}
+
+export interface UserRow {
+  id: string;
+  google_id: string;
+  email: string;
+  name: string | null;
+  avatar_url: string | null;
+  created_at: string;
+  last_login_at: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -6,6 +26,7 @@ export interface Workspace {
   appToken?: string;
   userToken?: string;     // User OAuth Token (xoxp-...) 自分として返信する場合に使用
   targetUserId?: string;  // 監視対象ユーザーID（このユーザーへのメンションをタスク化）
+  userId?: string;        // 所有者のユーザーID（Google認証時に紐づけ）
   teamId: string;
   addedAt: string;
   isActive: boolean;
@@ -81,6 +102,7 @@ export interface WorkspaceRow {
   app_token: string | null;
   user_token: string | null;
   target_user_id: string | null;
+  user_id: string | null;
   team_id: string | null;
   is_active: number;
   added_at: string;

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import type { Workspace, Task, SlackMessage, WorkspaceRow, TaskRow } from '@/types';
+import type { User, UserRow, Workspace, Task, SlackMessage, WorkspaceRow, TaskRow } from '@/types';
 
 const DB_PATH = process.env.DATABASE_PATH || './app.db';
 
@@ -20,6 +20,16 @@ function getDb(): Database.Database {
 
 function initTables(db: Database.Database) {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      google_id TEXT UNIQUE,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT,
+      avatar_url TEXT,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -28,6 +38,7 @@ function initTables(db: Database.Database) {
       app_token TEXT,
       user_token TEXT,
       target_user_id TEXT,
+      user_id TEXT,
       team_id TEXT,
       is_active INTEGER DEFAULT 1,
       added_at TEXT NOT NULL
@@ -50,6 +61,65 @@ function initTables(db: Database.Database) {
       related_channels TEXT DEFAULT '[]'
     );
   `);
+
+  // 既存DBのマイグレーション: user_id カラムがなければ追加
+  const columns = db.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[];
+  if (!columns.some((c) => c.name === 'user_id')) {
+    db.exec('ALTER TABLE workspaces ADD COLUMN user_id TEXT');
+  }
+}
+
+// --- User CRUD ---
+
+export function getUserByGoogleId(googleId: string): User | null {
+  const row = getDb().prepare('SELECT * FROM users WHERE google_id = ?').get(googleId) as UserRow | undefined;
+  return row ? rowToUser(row) : null;
+}
+
+export function getUserByEmail(email: string): User | null {
+  const row = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email) as UserRow | undefined;
+  return row ? rowToUser(row) : null;
+}
+
+export function upsertUser(data: { googleId: string; email: string; name: string; avatarUrl: string }): User {
+  const now = new Date().toISOString();
+  const existing = getUserByGoogleId(data.googleId);
+
+  if (existing) {
+    getDb().prepare(`
+      UPDATE users SET name = ?, avatar_url = ?, last_login_at = ? WHERE google_id = ?
+    `).run(data.name, data.avatarUrl, now, data.googleId);
+    return { ...existing, name: data.name, avatarUrl: data.avatarUrl, lastLoginAt: now };
+  }
+
+  const { v4: uuidv4 } = require('uuid');
+  const id = uuidv4();
+  getDb().prepare(`
+    INSERT INTO users (id, google_id, email, name, avatar_url, created_at, last_login_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, data.googleId, data.email, data.name, data.avatarUrl, now, now);
+
+  return {
+    id,
+    googleId: data.googleId,
+    email: data.email,
+    name: data.name,
+    avatarUrl: data.avatarUrl,
+    createdAt: now,
+    lastLoginAt: now,
+  };
+}
+
+function rowToUser(row: UserRow): User {
+  return {
+    id: row.id,
+    googleId: row.google_id,
+    email: row.email,
+    name: row.name || '',
+    avatarUrl: row.avatar_url || '',
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+  };
 }
 
 // --- Workspace CRUD ---
@@ -66,9 +136,9 @@ export function getWorkspace(id: string): Workspace | null {
 
 export function createWorkspace(ws: Workspace): Workspace {
   getDb().prepare(`
-    INSERT INTO workspaces (id, name, bot_token, signing_secret, app_token, user_token, target_user_id, team_id, is_active, added_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(ws.id, ws.name, ws.botToken, ws.signingSecret, ws.appToken || null, ws.userToken || null, ws.targetUserId || null, ws.teamId, ws.isActive ? 1 : 0, ws.addedAt);
+    INSERT INTO workspaces (id, name, bot_token, signing_secret, app_token, user_token, target_user_id, user_id, team_id, is_active, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(ws.id, ws.name, ws.botToken, ws.signingSecret, ws.appToken || null, ws.userToken || null, ws.targetUserId || null, ws.userId || null, ws.teamId, ws.isActive ? 1 : 0, ws.addedAt);
   return ws;
 }
 
@@ -86,10 +156,30 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     appToken: row.app_token || undefined,
     userToken: row.user_token || undefined,
     targetUserId: row.target_user_id || undefined,
+    userId: row.user_id || undefined,
     teamId: row.team_id || '',
     isActive: row.is_active === 1,
     addedAt: row.added_at,
   };
+}
+
+// --- User-scoped queries ---
+
+export function getWorkspacesByUserId(userId: string): Workspace[] {
+  const rows = getDb().prepare(
+    'SELECT * FROM workspaces WHERE user_id = ? ORDER BY added_at DESC'
+  ).all(userId) as WorkspaceRow[];
+  return rows.map(rowToWorkspace);
+}
+
+export function getTasksByUserId(userId: string): Task[] {
+  const rows = getDb().prepare(`
+    SELECT t.* FROM tasks t
+    INNER JOIN workspaces w ON t.workspace_id = w.id
+    WHERE w.user_id = ?
+    ORDER BY t.created_at DESC
+  `).all(userId) as TaskRow[];
+  return rows.map(rowToTask);
 }
 
 // --- Task CRUD ---

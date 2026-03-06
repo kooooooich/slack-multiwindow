@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import WorkspaceSetup from '@/components/WorkspaceSetup';
 import TaskBoard from '@/components/TaskBoard';
 import WindowManager from '@/components/WindowManager';
@@ -10,20 +11,27 @@ import type { Workspace, Task } from '@/types';
 
 export default function Home() {
   const [mode, setMode] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
+  const [authMode, setAuthMode] = useState<'google' | 'password' | 'none'>('none');
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setActiveWorkspaceId = useAppStore((s) => s.setActiveWorkspaceId);
   const setTasks = useAppStore((s) => s.setTasks);
   const workspaces = useAppStore((s) => s.workspaces);
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId);
+  const { data: session } = useSession();
 
   // 認証チェック → データロード
   const checkAuthAndLoad = useCallback(async () => {
     try {
-      // 認証状態チェック
-      const authRes = await fetch('/api/auth');
+      const authRes = await fetch('/api/auth/status');
       if (authRes.ok) {
         const authData = await authRes.json();
-        if (authData.passwordRequired && !authData.authenticated) {
+        setAuthMode(authData.authMode || 'none');
+
+        if (authData.authMode === 'google' && !authData.authenticated) {
+          setMode('login');
+          return;
+        }
+        if (authData.authMode === 'password' && authData.passwordRequired && !authData.authenticated) {
           setMode('login');
           return;
         }
@@ -32,7 +40,6 @@ export default function Home() {
       // 認証チェック失敗はスルー（ローカル開発時）
     }
 
-    // データロード
     await loadData();
   }, []);
 
@@ -168,7 +175,7 @@ export default function Home() {
   }
 
   if (mode === 'login') {
-    return <LoginScreen onLogin={() => loadData()} />;
+    return <LoginScreen onLogin={() => loadData()} authMode={authMode === 'none' ? 'password' : authMode} />;
   }
 
   if (mode === 'setup') {
@@ -190,9 +197,14 @@ export default function Home() {
         onChangeWorkspace={setActiveWorkspaceId}
         onOpenSettings={() => setMode('setup')}
         onLogout={async () => {
-          await fetch('/api/auth', { method: 'DELETE' });
-          setMode('login');
+          if (authMode === 'google') {
+            await signOut({ callbackUrl: '/' });
+          } else {
+            await fetch('/api/auth/password', { method: 'DELETE' });
+            setMode('login');
+          }
         }}
+        session={session}
       />
 
       {/* メインコンテンツ */}
@@ -210,12 +222,14 @@ function Header({
   onChangeWorkspace,
   onOpenSettings,
   onLogout,
+  session,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   onChangeWorkspace: (id: string) => void;
   onOpenSettings: () => void;
   onLogout: () => void;
+  session?: { user?: { name?: string | null; image?: string | null } } | null;
 }) {
   const openCount = useAppStore((s) => s.tasks.filter((t) => t.status === 'open').length);
 
@@ -260,6 +274,23 @@ function Header({
       )}
 
       <div className="ml-auto flex items-center gap-1">
+        {/* ユーザー情報（Google認証時） */}
+        {session?.user && (
+          <div className="flex items-center gap-2 mr-3">
+            {session.user.image && (
+              <img
+                src={session.user.image}
+                alt=""
+                className="w-6 h-6 rounded-full"
+                referrerPolicy="no-referrer"
+              />
+            )}
+            <span className="text-xs text-gray-400">
+              {session.user.name}
+            </span>
+          </div>
+        )}
+
         <button
           onClick={onOpenSettings}
           className="text-gray-500 hover:text-gray-300 transition p-1 rounded hover:bg-white/5"

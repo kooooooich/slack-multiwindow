@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist_Mono } from "next/font/google";
+import Providers from "@/components/Providers";
 import "./globals.css";
 
 const geistMono = Geist_Mono({
@@ -20,7 +21,7 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <body className={`${geistMono.variable} font-mono antialiased bg-[#0F1117] text-white`}>
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
