@@ -4,6 +4,7 @@ export interface Workspace {
   botToken: string;
   signingSecret: string;
   appToken?: string;
+  targetUserId?: string;  // 監視対象ユーザーID（このユーザーへのメンションをタスク化）
   teamId: string;
   addedAt: string;
   isActive: boolean;
@@ -69,6 +70,7 @@ export interface WorkspaceRow {
   bot_token: string;
   signing_secret: string;
   app_token: string | null;
+  target_user_id: string | null;
   team_id: string | null;
   is_active: number;
   added_at: string;

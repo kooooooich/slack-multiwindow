@@ -26,6 +26,7 @@ function initTables(db: Database.Database) {
       bot_token TEXT NOT NULL,
       signing_secret TEXT NOT NULL,
       app_token TEXT,
+      target_user_id TEXT,
       team_id TEXT,
       is_active INTEGER DEFAULT 1,
       added_at TEXT NOT NULL
@@ -64,9 +65,9 @@ export function getWorkspace(id: string): Workspace | null {
 
 export function createWorkspace(ws: Workspace): Workspace {
   getDb().prepare(`
-    INSERT INTO workspaces (id, name, bot_token, signing_secret, app_token, team_id, is_active, added_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(ws.id, ws.name, ws.botToken, ws.signingSecret, ws.appToken || null, ws.teamId, ws.isActive ? 1 : 0, ws.addedAt);
+    INSERT INTO workspaces (id, name, bot_token, signing_secret, app_token, target_user_id, team_id, is_active, added_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(ws.id, ws.name, ws.botToken, ws.signingSecret, ws.appToken || null, ws.targetUserId || null, ws.teamId, ws.isActive ? 1 : 0, ws.addedAt);
   return ws;
 }
 
@@ -82,6 +83,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     botToken: row.bot_token,
     signingSecret: row.signing_secret,
     appToken: row.app_token || undefined,
+    targetUserId: row.target_user_id || undefined,
     teamId: row.team_id || '',
     isActive: row.is_active === 1,
     addedAt: row.added_at,

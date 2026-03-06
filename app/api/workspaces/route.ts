@@ -23,7 +23,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { name, botToken, signingSecret, appToken } = body;
+    const { name, botToken, signingSecret, appToken, targetUserId } = body;
 
     if (!name || !botToken || !signingSecret) {
       return NextResponse.json(
@@ -51,6 +51,7 @@ export async function POST(req: NextRequest) {
       botToken,
       signingSecret,
       appToken: appToken || undefined,
+      targetUserId: targetUserId || undefined,
       teamId,
       addedAt: new Date().toISOString(),
       isActive: true,

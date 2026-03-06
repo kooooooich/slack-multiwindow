@@ -1,9 +1,29 @@
 import { NextResponse } from 'next/server';
-import { addSSEListener, removeSSEListener } from '@/lib/bolt-server';
+import { addSSEListener, removeSSEListener, startSlackBolt, isBoltRunning } from '@/lib/bolt-server';
 
 export const dynamic = 'force-dynamic';
 
+// Bolt自動起動（dev mode対応: server.jsを経由しない場合）
+async function ensureBoltStarted() {
+  // 既に起動済みなら何もしない
+  if (isBoltRunning()) return;
+
+  try {
+    const started = await startSlackBolt();
+    if (started) {
+      console.log('[Stream] Slack Bolt auto-started from SSE endpoint');
+    } else {
+      console.log('[Stream] Slack Bolt not started (no workspaces or missing config)');
+    }
+  } catch (err) {
+    console.log('[Stream] Slack Bolt auto-start failed:', err);
+  }
+}
+
 export async function GET() {
+  // Bolt を自動起動
+  await ensureBoltStarted();
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({

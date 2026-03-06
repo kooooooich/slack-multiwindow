@@ -29,13 +29,23 @@ function notifyListeners(type: string, data: unknown) {
 
 let boltApp: App | null = null;
 
-export async function startSlackBolt() {
+// Bolt が実際に起動したかどうか（外部から参照可能）
+export function isBoltRunning(): boolean {
+  return boltApp !== null;
+}
+
+export async function startSlackBolt(): Promise<boolean> {
+  // 既に起動済みの場合はスキップ
+  if (boltApp) {
+    console.log('[Bolt] Already running. Skipping.');
+    return true;
+  }
+
   const workspaces = getAllWorkspaces();
 
   if (workspaces.length === 0) {
     console.log('[Bolt] No workspaces configured. Skipping Slack Bolt startup.');
-    console.log('[Bolt] Add a workspace via UI and restart to enable Slack events.');
-    return;
+    return false;
   }
 
   // 最初のワークスペースの設定を使用（マルチワークスペースは将来対応）
@@ -45,10 +55,18 @@ export async function startSlackBolt() {
   const appToken = ws.appToken || process.env.SLACK_APP_TOKEN;
   const botToken = ws.botToken || process.env.SLACK_BOT_TOKEN;
   const signingSecret = ws.signingSecret || process.env.SLACK_SIGNING_SECRET;
+  const targetUserId = ws.targetUserId || process.env.SLACK_TARGET_USER_ID;
 
   if (!botToken || !signingSecret) {
     console.log('[Bolt] Missing bot token or signing secret. Skipping.');
-    return;
+    return false;
+  }
+
+  if (!targetUserId) {
+    console.log('[Bolt] No target user ID configured. Mention detection disabled.');
+    console.log('[Bolt] Set targetUserId in workspace settings or SLACK_TARGET_USER_ID env var.');
+  } else {
+    console.log(`[Bolt] Monitoring mentions for user: ${targetUserId}`);
   }
 
   const appConfig: ConstructorParameters<typeof App>[0] = {
@@ -62,10 +80,6 @@ export async function startSlackBolt() {
     appConfig.appToken = appToken;
     console.log('[Bolt] Starting in Socket Mode...');
   } else {
-    // Events API mode: Bolt は HTTP receiver を使わず、
-    // Next.js の /api/slack/events が受信する
-    // ここでは Bolt の event listener だけ登録し、
-    // /api/slack/events から processEvent を呼ぶ
     console.log('[Bolt] Starting in Events API mode...');
     console.log('[Bolt] Events will be received via /api/slack/events');
   }
@@ -74,30 +88,65 @@ export async function startSlackBolt() {
 
   // --- Event Handlers ---
 
-  // app_mention イベント
-  boltApp.event('app_mention', async ({ event, context }) => {
-    await handleMention(event, context, ws.id);
+  // message イベント: ユーザーへのメンション検知 + スレッド返信追跡
+  boltApp.event('message', async ({ event, context }) => {
+    const msg = event as {
+      thread_ts?: string;
+      subtype?: string;
+      channel?: string;
+      user?: string;
+      text?: string;
+      ts?: string;
+    };
+
+    // subtype ありは無視（bot_message, channel_join など）
+    if (msg.subtype) return;
+
+    const text = msg.text || '';
+    const channelId = msg.channel || '';
+    const ts = msg.ts || '';
+
+    // 1. ユーザーメンションの検知（新規タスク or 既存タスク更新）
+    if (targetUserId && text.includes(`<@${targetUserId}>`)) {
+      await handleUserMention(
+        { channel: channelId, thread_ts: msg.thread_ts, ts, user: msg.user, text },
+        context,
+        ws.id,
+        targetUserId,
+      );
+      return;
+    }
+
+    // 2. スレッド返信の追跡（既存タスクのスレッドに返信があった場合）
+    if (msg.thread_ts) {
+      await handleThreadReply(
+        { channel: channelId, thread_ts: msg.thread_ts, ts, user: msg.user, text },
+        context,
+        ws.id,
+      );
+    }
   });
 
-  // message イベント（スレッド内の返信）
-  boltApp.event('message', async ({ event, context }) => {
-    const msg = event as { thread_ts?: string; subtype?: string; channel?: string; user?: string; text?: string; ts?: string };
-    // スレッド返信のみ処理（thread_tsがある = スレッド内メッセージ）
-    if (!msg.thread_ts || msg.subtype) return;
-    await handleThreadReply(msg, context, ws.id);
+  // app_mention も念のため残す（ボットへのメンション = タスク化したい場合に対応）
+  boltApp.event('app_mention', async ({ event, context }) => {
+    // targetUserId が設定されている場合、app_mention は message イベントで処理済みなのでスキップ
+    if (targetUserId) return;
+    await handleUserMention(event, context, ws.id, '');
   });
 
   if (useSocketMode) {
     await boltApp.start();
     console.log('[Bolt] Socket Mode app started successfully');
   }
+
+  return true;
 }
 
 export function getBoltApp(): App | null {
   return boltApp;
 }
 
-interface MentionEvent {
+interface MessageEvent {
   channel: string;
   thread_ts?: string;
   ts: string;
@@ -105,16 +154,17 @@ interface MentionEvent {
   text?: string;
 }
 
-async function handleMention(
-  event: MentionEvent,
+async function handleUserMention(
+  event: MessageEvent,
   context: { botToken?: string },
   workspaceId: string,
+  _targetUserId: string,
 ) {
   const botToken = context.botToken || '';
   const threadTs = event.thread_ts || event.ts;
   const channelId = event.channel;
 
-  console.log(`[Bolt] Mention received in #${channelId}, thread: ${threadTs}`);
+  console.log(`[Bolt] User mention detected in #${channelId}, thread: ${threadTs}`);
 
   // 既存タスクチェック
   const existing = getTaskByThread(workspaceId, channelId, threadTs);

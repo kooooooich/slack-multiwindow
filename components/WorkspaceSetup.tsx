@@ -19,6 +19,7 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
   const [botToken, setBotToken] = useState('');
   const [signingSecret, setSigningSecret] = useState('');
   const [appToken, setAppToken] = useState('');
+  const [targetUserId, setTargetUserId] = useState('');
 
   const fetchWorkspaces = useCallback(async () => {
     try {
@@ -43,7 +44,7 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
       const res = await fetch('/api/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, botToken, signingSecret, appToken: appToken || undefined }),
+        body: JSON.stringify({ name, botToken, signingSecret, appToken: appToken || undefined, targetUserId: targetUserId || undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -54,6 +55,7 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
       setBotToken('');
       setSigningSecret('');
       setAppToken('');
+      setTargetUserId('');
       setShowForm(false);
       await fetchWorkspaces();
     } catch {
@@ -213,6 +215,22 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
                 placeholder="xapp-..."
                 className="w-full bg-[#0F1117] border border-white/10 rounded px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-[#4A9EFF] transition"
               />
+            </div>
+
+            <div>
+              <label className="block text-gray-400 text-xs font-mono mb-1">
+                監視対象ユーザーID (U...)
+              </label>
+              <input
+                type="text"
+                value={targetUserId}
+                onChange={(e) => setTargetUserId(e.target.value)}
+                placeholder="U11NGQDSP"
+                className="w-full bg-[#0F1117] border border-white/10 rounded px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-[#4A9EFF] transition"
+              />
+              <p className="text-gray-600 text-[10px] font-mono mt-1">
+                このユーザーへのメンションをタスク化します。Slackプロフィール → &quot;...&quot; → Copy member ID で取得
+              </p>
             </div>
 
             <div className="flex gap-3 pt-2">
