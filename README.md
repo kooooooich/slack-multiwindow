@@ -10,6 +10,10 @@ Slackの複数ワークスペースにまたがるメンション・スレッド
 - **関連チャネル投稿**: スレッド返信と同時に別チャネルへクロス投稿
 - **マルチワークスペース**: 複数Slackワークスペースを同時管理
 - **タスク管理**: 未完了/完了ステータス管理
+- **Slackアバター・ユーザー名表示**: 実際のSlackプロフィール画像とユーザー名を表示
+- **絵文字リアクション**: メッセージへのリアクション表示・追加・削除
+- **全チャンネル自動参加**: ボットを全パブリックチャンネルに一括参加
+- **自分として返信**: User Tokenを使い、ボットではなく自分の名前で返信
 
 ## 技術スタック
 
@@ -44,17 +48,35 @@ npm run dev
 ### Slack App の設定
 
 1. [Slack API](https://api.slack.com/apps) で新しいアプリを作成
-2. **Bot Token Scopes** を追加:
-   - `app_mentions:read`
-   - `channels:history`
-   - `channels:read`
-   - `chat:write`
-   - `users:read`
-3. **Event Subscriptions** を有効化:
+
+2. **Bot Token Scopes** を追加（OAuth & Permissions → Scopes → Bot Token Scopes）:
+   - `app_mentions:read` — メンション検知
+   - `channels:history` — チャンネルメッセージ取得
+   - `channels:read` — チャンネル一覧取得
+   - `channels:join` — 全パブリックチャンネルへの自動参加
+   - `chat:write` — ボットとしてメッセージ送信
+   - `reactions:read` — リアクション取得
+   - `reactions:write` — リアクション追加/削除
+   - `users:read` — ユーザー情報取得（アバター・表示名）
+
+3. **User Token Scopes** を追加（自分自身として返信する場合）:
+   - `chat:write` — 自分の名前でメッセージ送信
+
+4. **Event Subscriptions** を有効化:
    - `app_mention`
    - `message.channels`
-4. **Socket Mode** を有効化（ローカル開発用）
-5. ワークスペースにインストール
+
+5. **Socket Mode** を有効化（ローカル開発用）
+
+6. ワークスペースにインストール
+
+7. トークンを取得（OAuth & Permissions ページ）:
+   - **Bot User OAuth Token**（`xoxb-...`）→ 環境変数 `SLACK_BOT_TOKEN` に設定
+   - **User OAuth Token**（`xoxp-...`）→ ワークスペース設定画面の「User Token」欄に入力
+
+> **💡 User Token について**: User Token を設定すると、アプリからの返信がボットではなく自分自身の名前で送信されます。設定しない場合はボットとして返信します。
+
+> **💡 全チャンネル自動参加**: ワークスペース設定画面の「全チャンネルに参加」ボタンで、ボットを全パブリックチャンネルに一括参加させることができます。チャンネルごとに手動でアプリを追加する必要がなくなります。
 
 ## Railway デプロイ
 
@@ -132,9 +154,10 @@ slack-multiwindow/
 │   │   ├── health/        # ヘルスチェック
 │   │   ├── ai/assist/     # AI返信補助
 │   │   ├── slack/
-│   │   │   ├── channels/  # チャネル一覧
+│   │   │   ├── channels/  # チャネル一覧・全チャンネル自動参加
 │   │   │   ├── events/    # Slackイベント受信
-│   │   │   ├── messages/  # メッセージ送信
+│   │   │   ├── messages/  # メッセージ送信（User Token対応）
+│   │   │   ├── reactions/ # リアクション追加/削除
 │   │   │   └── stream/    # SSEストリーム
 │   │   ├── tasks/         # タスクCRUD
 │   │   └── workspaces/    # ワークスペースCRUD
