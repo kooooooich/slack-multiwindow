@@ -74,6 +74,10 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
   const [emojiPickerMsgTs, setEmojiPickerMsgTs] = useState<string | null>(null);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const posRef = useRef(pos);
+  const sizeRef = useRef(size);
+  posRef.current = pos;
+  sizeRef.current = size;
 
   // 新しいメッセージが来たらスクロール
   useEffect(() => {
@@ -145,17 +149,11 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
     const handleMouseUp = () => {
       if (isDragging) {
         setIsDragging(false);
-        setPos((p) => {
-          updateWindowPosition(task.id, p);
-          return p;
-        });
+        updateWindowPosition(task.id, posRef.current);
       }
       if (isResizing) {
         setIsResizing(false);
-        setSize((s) => {
-          updateWindowSize(task.id, s);
-          return s;
-        });
+        updateWindowSize(task.id, sizeRef.current);
       }
     };
 
