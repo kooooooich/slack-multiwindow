@@ -6,7 +6,7 @@ import {
   createTask,
   updateTask,
 } from './db';
-import { fetchThreadMessages, resolveUserName, getChannelName } from './slack';
+import { fetchThreadMessages, resolveUserProfile, getChannelName } from './slack';
 import type { Task, SlackMessage } from '@/types';
 
 // SSE用のイベントバス（Step 10で利用）
@@ -177,7 +177,9 @@ async function handleUserMention(
   }
 
   // 新規タスク作成
-  const userName = event.user ? await resolveUserName(botToken, event.user) : 'unknown';
+  const userProfile = event.user
+    ? await resolveUserProfile(botToken, event.user)
+    : { displayName: 'unknown', avatarUrl: '' };
   const channelName = await getChannelName(botToken, channelId);
   const threadMessages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
 
@@ -189,7 +191,8 @@ async function handleUserMention(
     threadTs,
     ts: event.ts,
     userId: event.user || '',
-    userName,
+    userName: userProfile.displayName,
+    avatarUrl: userProfile.avatarUrl,
     text: event.text || '',
     isDirectMention: true,
     isThreadParticipant: false,

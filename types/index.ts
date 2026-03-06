@@ -10,6 +10,12 @@ export interface Workspace {
   isActive: boolean;
 }
 
+export interface SlackReaction {
+  name: string;       // emoji name without colons, e.g. "thumbsup"
+  count: number;
+  users: string[];    // user IDs who reacted
+}
+
 export interface SlackMessage {
   id: string;
   workspaceId: string;
@@ -19,9 +25,11 @@ export interface SlackMessage {
   ts: string;
   userId: string;
   userName: string;
+  avatarUrl?: string;          // Slack profile image URL
   text: string;
   isDirectMention: boolean;
   isThreadParticipant: boolean;
+  reactions?: SlackReaction[];  // reactions on this message
 }
 
 export interface Task {

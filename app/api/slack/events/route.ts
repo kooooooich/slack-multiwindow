@@ -7,7 +7,7 @@ import {
   createTask,
   updateTask,
 } from '@/lib/db';
-import { fetchThreadMessages, resolveUserName, getChannelName } from '@/lib/slack';
+import { fetchThreadMessages, resolveUserProfile, getChannelName } from '@/lib/slack';
 import type { Task, SlackMessage } from '@/types';
 
 // Slack Events API Webhook 受信（本番 Events API モード用）
@@ -100,7 +100,9 @@ async function handleMention(
     return;
   }
 
-  const userName = event.user ? await resolveUserName(botToken, event.user) : 'unknown';
+  const userProfile = event.user
+    ? await resolveUserProfile(botToken, event.user)
+    : { displayName: 'unknown', avatarUrl: '' };
   const channelName = await getChannelName(botToken, channelId);
   const threadMessages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
 
@@ -112,7 +114,8 @@ async function handleMention(
     threadTs,
     ts: event.ts,
     userId: event.user || '',
-    userName,
+    userName: userProfile.displayName,
+    avatarUrl: userProfile.avatarUrl,
     text: event.text || '',
     isDirectMention: true,
     isThreadParticipant: false,
