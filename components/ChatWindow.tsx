@@ -3,6 +3,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import MessageComposer from './MessageComposer';
+import AiAssistPanel from './AiAssistPanel';
 import type { Task } from '@/types';
 
 interface ChatWindowProps {
@@ -197,13 +198,15 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         />
       )}
 
-      {/* AI補助パネル（Step 8で実装） */}
+      {/* AI補助パネル */}
       {showAiPanel && task.status === 'open' && (
-        <div className="border-t border-white/5 p-3 bg-[#161929] shrink-0">
-          <div className="text-[10px] text-gray-500 text-center py-2">
-            AI補助パネル（Step 8で実装）
-          </div>
-        </div>
+        <AiAssistPanel
+          task={task}
+          onUseSuggestion={(text) => {
+            setReplyText(text);
+            setShowAiPanel(false);
+          }}
+        />
       )}
 
       {/* リサイズハンドル */}
