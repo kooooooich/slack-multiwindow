@@ -181,13 +181,67 @@ export async function postMessage(
   channelId: string,
   text: string,
   threadTs?: string,
+  userToken?: string,
 ): Promise<void> {
-  const client = getSlackClient(botToken);
+  // userTokenがあればユーザー自身として投稿、なければBotとして投稿
+  const client = getSlackClient(userToken || botToken);
   await client.chat.postMessage({
     channel: channelId,
     text,
     ...(threadTs ? { thread_ts: threadTs } : {}),
   });
+}
+
+// --- 全チャンネル自動参加 ---
+
+export async function joinAllChannels(
+  botToken: string,
+): Promise<{ joined: string[]; alreadyIn: string[]; failed: string[] }> {
+  const client = getSlackClient(botToken);
+  const joined: string[] = [];
+  const alreadyIn: string[] = [];
+  const failed: string[] = [];
+
+  // パブリックチャンネル一覧を取得（ページネーション対応）
+  let cursor: string | undefined;
+  const allChannels: { id: string; name: string; is_member: boolean }[] = [];
+
+  do {
+    const result = await client.conversations.list({
+      types: 'public_channel',
+      limit: 200,
+      exclude_archived: true,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    for (const ch of result.channels || []) {
+      const channel = ch as { id: string; name: string; is_member?: boolean };
+      allChannels.push({
+        id: channel.id,
+        name: channel.name,
+        is_member: channel.is_member || false,
+      });
+    }
+
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+
+  // 未参加のチャンネルに参加
+  for (const ch of allChannels) {
+    if (ch.is_member) {
+      alreadyIn.push(ch.name);
+      continue;
+    }
+    try {
+      await client.conversations.join({ channel: ch.id });
+      joined.push(ch.name);
+    } catch {
+      failed.push(ch.name);
+    }
+  }
+
+  console.log(`[Slack] Auto-join: ${joined.length} joined, ${alreadyIn.length} already in, ${failed.length} failed`);
+  return { joined, alreadyIn, failed };
 }
 
 export async function listChannels(

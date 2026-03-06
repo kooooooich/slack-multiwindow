@@ -13,12 +13,14 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [testResults, setTestResults] = useState<Record<string, 'testing' | 'ok' | 'fail'>>({});
+  const [joinResults, setJoinResults] = useState<Record<string, { status: 'joining' | 'done' | 'fail'; message?: string }>>({});
 
   // フォーム
   const [name, setName] = useState('');
   const [botToken, setBotToken] = useState('');
   const [signingSecret, setSigningSecret] = useState('');
   const [appToken, setAppToken] = useState('');
+  const [userToken, setUserToken] = useState('');
   const [targetUserId, setTargetUserId] = useState('');
 
   const fetchWorkspaces = useCallback(async () => {
@@ -44,7 +46,14 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
       const res = await fetch('/api/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, botToken, signingSecret, appToken: appToken || undefined, targetUserId: targetUserId || undefined }),
+        body: JSON.stringify({
+          name,
+          botToken,
+          signingSecret,
+          appToken: appToken || undefined,
+          userToken: userToken || undefined,
+          targetUserId: targetUserId || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -55,6 +64,7 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
       setBotToken('');
       setSigningSecret('');
       setAppToken('');
+      setUserToken('');
       setTargetUserId('');
       setShowForm(false);
       await fetchWorkspaces();
@@ -89,6 +99,31 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
     }
   };
 
+  const handleJoinAllChannels = async (ws: Workspace) => {
+    setJoinResults((prev) => ({ ...prev, [ws.id]: { status: 'joining' } }));
+    try {
+      const res = await fetch('/api/slack/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId: ws.id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setJoinResults((prev) => ({
+          ...prev,
+          [ws.id]: {
+            status: 'done',
+            message: `${data.joined?.length || 0}ch参加, ${data.alreadyIn?.length || 0}ch参加済み`,
+          },
+        }));
+      } else {
+        setJoinResults((prev) => ({ ...prev, [ws.id]: { status: 'fail', message: data.error } }));
+      }
+    } catch {
+      setJoinResults((prev) => ({ ...prev, [ws.id]: { status: 'fail' } }));
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0F1117] flex items-center justify-center p-6">
       <div className="w-full max-w-2xl">
@@ -104,43 +139,67 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
           {workspaces.map((ws) => (
             <div
               key={ws.id}
-              className="bg-[#1A1D27] border border-white/10 rounded-lg p-4 flex items-center justify-between"
+              className="bg-[#1A1D27] border border-white/10 rounded-lg p-4"
             >
-              <div className="flex-1">
-                <div className="flex items-center gap-3">
-                  <span className="text-white font-mono font-semibold">{ws.name}</span>
-                  <span className="text-xs text-gray-500 font-mono">
-                    Team: {ws.teamId || 'N/A'}
-                  </span>
-                  {ws.isActive && (
-                    <span className="text-xs bg-[#2ECC71]/20 text-[#2ECC71] px-2 py-0.5 rounded">
-                      Active
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    <span className="text-white font-mono font-semibold">{ws.name}</span>
+                    <span className="text-xs text-gray-500 font-mono">
+                      Team: {ws.teamId || 'N/A'}
                     </span>
-                  )}
+                    {ws.isActive && (
+                      <span className="text-xs bg-[#2ECC71]/20 text-[#2ECC71] px-2 py-0.5 rounded">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 font-mono mt-1 flex gap-3">
+                    <span>Bot: {ws.botToken}</span>
+                    {ws.userToken && <span className="text-[#F39C12]">User Token: {ws.userToken}</span>}
+                  </div>
                 </div>
-                <div className="text-xs text-gray-500 font-mono mt-1">
-                  Token: {ws.botToken}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTest(ws)}
+                    className="text-xs px-3 py-1.5 rounded bg-[#4A9EFF]/20 text-[#4A9EFF] hover:bg-[#4A9EFF]/30 transition font-mono"
+                  >
+                    {testResults[ws.id] === 'testing'
+                      ? '...'
+                      : testResults[ws.id] === 'ok'
+                      ? '✅ OK'
+                      : testResults[ws.id] === 'fail'
+                      ? '❌ Fail'
+                      : '接続テスト'}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(ws.id)}
+                    className="text-xs px-3 py-1.5 rounded bg-[#E74C3C]/20 text-[#E74C3C] hover:bg-[#E74C3C]/30 transition font-mono"
+                  >
+                    削除
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              {/* 全チャンネル参加ボタン */}
+              <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-3">
                 <button
-                  onClick={() => handleTest(ws)}
-                  className="text-xs px-3 py-1.5 rounded bg-[#4A9EFF]/20 text-[#4A9EFF] hover:bg-[#4A9EFF]/30 transition font-mono"
+                  onClick={() => handleJoinAllChannels(ws)}
+                  disabled={joinResults[ws.id]?.status === 'joining'}
+                  className="text-xs px-3 py-1.5 rounded bg-[#2ECC71]/20 text-[#2ECC71] hover:bg-[#2ECC71]/30 transition font-mono disabled:opacity-50"
                 >
-                  {testResults[ws.id] === 'testing'
-                    ? '...'
-                    : testResults[ws.id] === 'ok'
-                    ? '✅ OK'
-                    : testResults[ws.id] === 'fail'
-                    ? '❌ Fail'
-                    : '接続テスト'}
+                  {joinResults[ws.id]?.status === 'joining' ? '参加中...' : '全チャンネルに参加'}
                 </button>
-                <button
-                  onClick={() => handleDelete(ws.id)}
-                  className="text-xs px-3 py-1.5 rounded bg-[#E74C3C]/20 text-[#E74C3C] hover:bg-[#E74C3C]/30 transition font-mono"
-                >
-                  削除
-                </button>
+                {joinResults[ws.id]?.status === 'done' && (
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    ✅ {joinResults[ws.id].message}
+                  </span>
+                )}
+                {joinResults[ws.id]?.status === 'fail' && (
+                  <span className="text-[10px] text-[#E74C3C] font-mono">
+                    ❌ {joinResults[ws.id].message || '失敗'}
+                  </span>
+                )}
               </div>
             </div>
           ))}
@@ -215,6 +274,22 @@ export default function WorkspaceSetup({ onComplete }: WorkspaceSetupProps) {
                 placeholder="xapp-..."
                 className="w-full bg-[#0F1117] border border-white/10 rounded px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-[#4A9EFF] transition"
               />
+            </div>
+
+            <div>
+              <label className="block text-gray-400 text-xs font-mono mb-1">
+                User Token (xoxp-... / 任意 / 自分として返信する場合)
+              </label>
+              <input
+                type="password"
+                value={userToken}
+                onChange={(e) => setUserToken(e.target.value)}
+                placeholder="xoxp-..."
+                className="w-full bg-[#0F1117] border border-white/10 rounded px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-[#4A9EFF] transition"
+              />
+              <p className="text-gray-600 text-[10px] font-mono mt-1">
+                設定すると返信がBot名ではなくあなた自身の名前で投稿されます。Slack App設定 → OAuth &amp; Permissions → User Token Scopes に chat:write を追加後、再インストールして取得
+              </p>
             </div>
 
             <div>

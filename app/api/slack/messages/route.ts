@@ -14,15 +14,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ワークスペースのbotTokenを取得
+    // ワークスペースのトークンを取得
     let botToken = '';
+    let userToken = '';
     if (workspaceId) {
       const ws = getWorkspace(workspaceId);
-      if (ws) botToken = ws.botToken;
+      if (ws) {
+        botToken = ws.botToken;
+        userToken = ws.userToken || '';
+      }
     }
     if (!botToken) {
       const workspaces = getAllWorkspaces();
-      if (workspaces.length > 0) botToken = workspaces[0].botToken;
+      if (workspaces.length > 0) {
+        botToken = workspaces[0].botToken;
+        userToken = workspaces[0].userToken || '';
+      }
     }
 
     if (!botToken) {
@@ -32,8 +39,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // メッセージ送信
-    await postMessage(botToken, channelId, text, threadTs);
+    // メッセージ送信（userTokenがあればユーザー自身として投稿）
+    await postMessage(botToken, channelId, text, threadTs, userToken || undefined);
 
     // タスクのスレッドメッセージを更新
     if (threadTs && workspaceId) {

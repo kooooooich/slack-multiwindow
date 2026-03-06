@@ -12,6 +12,7 @@ export async function GET() {
       botToken: ws.botToken ? '***' + ws.botToken.slice(-6) : '',
       signingSecret: '***',
       appToken: ws.appToken ? '***' + ws.appToken.slice(-6) : undefined,
+      userToken: ws.userToken ? '***' + ws.userToken.slice(-6) : undefined,
     }));
     return NextResponse.json(safe);
   } catch (error) {
@@ -23,7 +24,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { name, botToken, signingSecret, appToken, targetUserId } = body;
+    const { name, botToken, signingSecret, appToken, userToken, targetUserId } = body;
 
     if (!name || !botToken || !signingSecret) {
       return NextResponse.json(
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
       botToken,
       signingSecret,
       appToken: appToken || undefined,
+      userToken: userToken || undefined,
       targetUserId: targetUserId || undefined,
       teamId,
       addedAt: new Date().toISOString(),
@@ -62,6 +64,7 @@ export async function POST(req: NextRequest) {
       botToken: '***' + workspace.botToken.slice(-6),
       signingSecret: '***',
       appToken: workspace.appToken ? '***' + workspace.appToken.slice(-6) : undefined,
+      userToken: workspace.userToken ? '***' + workspace.userToken.slice(-6) : undefined,
     });
   } catch (error) {
     console.error('Failed to create workspace:', error);
