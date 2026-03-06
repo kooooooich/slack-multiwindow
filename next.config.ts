@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // サーバーサイドの native モジュール（better-sqlite3 など）をバンドルしない
+  serverExternalPackages: ['better-sqlite3'],
+  output: 'standalone',
 };
 
 export default nextConfig;

@@ -4,16 +4,37 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import WorkspaceSetup from '@/components/WorkspaceSetup';
 import TaskBoard from '@/components/TaskBoard';
 import WindowManager from '@/components/WindowManager';
+import LoginScreen from '@/components/LoginScreen';
 import { useAppStore } from '@/lib/store';
 import type { Workspace, Task } from '@/types';
 
 export default function Home() {
-  const [mode, setMode] = useState<'loading' | 'setup' | 'app'>('loading');
+  const [mode, setMode] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setActiveWorkspaceId = useAppStore((s) => s.setActiveWorkspaceId);
   const setTasks = useAppStore((s) => s.setTasks);
   const workspaces = useAppStore((s) => s.workspaces);
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId);
+
+  // 認証チェック → データロード
+  const checkAuthAndLoad = useCallback(async () => {
+    try {
+      // 認証状態チェック
+      const authRes = await fetch('/api/auth');
+      if (authRes.ok) {
+        const authData = await authRes.json();
+        if (authData.passwordRequired && !authData.authenticated) {
+          setMode('login');
+          return;
+        }
+      }
+    } catch {
+      // 認証チェック失敗はスルー（ローカル開発時）
+    }
+
+    // データロード
+    await loadData();
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
@@ -21,6 +42,13 @@ export default function Home() {
         fetch('/api/workspaces'),
         fetch('/api/tasks'),
       ]);
+
+      // 401 の場合はログイン画面へ
+      if (wsRes.status === 401) {
+        setMode('login');
+        return;
+      }
+
       const wsData = await wsRes.json();
       const taskData = await taskRes.json();
 
@@ -40,8 +68,8 @@ export default function Home() {
   }, [setWorkspaces, setActiveWorkspaceId, setTasks]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    checkAuthAndLoad();
+  }, [checkAuthAndLoad]);
 
   // リアルタイム更新: SSE + ポーリングフォールバック
   const addTask = useAppStore((s) => s.addTask);
@@ -139,6 +167,10 @@ export default function Home() {
     );
   }
 
+  if (mode === 'login') {
+    return <LoginScreen onLogin={() => loadData()} />;
+  }
+
   if (mode === 'setup') {
     return (
       <WorkspaceSetup
@@ -157,6 +189,10 @@ export default function Home() {
         activeWorkspaceId={activeWorkspaceId}
         onChangeWorkspace={setActiveWorkspaceId}
         onOpenSettings={() => setMode('setup')}
+        onLogout={async () => {
+          await fetch('/api/auth', { method: 'DELETE' });
+          setMode('login');
+        }}
       />
 
       {/* メインコンテンツ */}
@@ -173,11 +209,13 @@ function Header({
   activeWorkspaceId,
   onChangeWorkspace,
   onOpenSettings,
+  onLogout,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   onChangeWorkspace: (id: string) => void;
   onOpenSettings: () => void;
+  onLogout: () => void;
 }) {
   const openCount = useAppStore((s) => s.tasks.filter((t) => t.status === 'open').length);
 
@@ -221,7 +259,7 @@ function Header({
         </span>
       )}
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-1">
         <button
           onClick={onOpenSettings}
           className="text-gray-500 hover:text-gray-300 transition p-1 rounded hover:bg-white/5"
@@ -239,6 +277,26 @@ function Header({
           >
             <circle cx="12" cy="12" r="3" />
             <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+          </svg>
+        </button>
+        <button
+          onClick={onLogout}
+          className="text-gray-500 hover:text-gray-300 transition p-1 rounded hover:bg-white/5"
+          title="ログアウト"
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
           </svg>
         </button>
       </div>
