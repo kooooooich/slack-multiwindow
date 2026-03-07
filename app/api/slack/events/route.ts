@@ -96,7 +96,17 @@ async function handleMention(
   const existing = getTaskByThread(workspaceId, channelId, threadTs);
   if (existing) {
     const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-    updateTask(existing.id, { threadMessages: messages });
+    const updates: Partial<Task> = { threadMessages: messages };
+
+    // 完了済みタスクにメンションがあった場合は再オープン
+    if (existing.status === 'completed') {
+      updates.status = 'open';
+      updates.completedAt = undefined;
+      updates.isMinimized = false;
+      console.log(`[Events API] Reopening completed task due to mention: ${existing.id}`);
+    }
+
+    updateTask(existing.id, updates);
     return;
   }
 
@@ -153,6 +163,16 @@ async function handleThreadReply(
   if (!existing) return;
 
   const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-  updateTask(existing.id, { threadMessages: messages });
+  const updates: Partial<Task> = { threadMessages: messages };
+
+  // 完了済みタスクにスレッド返信があった場合は再オープン
+  if (existing.status === 'completed') {
+    updates.status = 'open';
+    updates.completedAt = undefined;
+    updates.isMinimized = false;
+    console.log(`[Events API] Reopening completed task due to thread reply: ${existing.id}`);
+  }
+
+  updateTask(existing.id, updates);
   console.log(`[Events API] Thread reply updated task: ${existing.id}`);
 }

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useAppStore } from '@/lib/store';
+import { parseMrkdwn } from '@/lib/mrkdwn';
 import type { Task } from '@/types';
 
 interface MessageComposerProps {
@@ -18,6 +19,13 @@ interface ChannelOption {
   name: string;
 }
 
+interface UserOption {
+  id: string;
+  name: string;
+  realName: string;
+  avatarUrl: string;
+}
+
 const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(function MessageComposer({
   task,
   onAiAssist,
@@ -25,6 +33,7 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
   const completeTask = useAppStore((s) => s.completeTask);
   const updateTaskStore = useAppStore((s) => s.updateTask);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,6 +51,14 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
   const [allChannels, setAllChannels] = useState<ChannelOption[]>([]);
   const [loadingChannels, setLoadingChannels] = useState(false);
   const [selectedCrossPostChannel, setSelectedCrossPostChannel] = useState<string | null>(null);
+
+  // メンション・チャネルサジェスト
+  const [allUsers, setAllUsers] = useState<UserOption[]>([]);
+  const [suggestType, setSuggestType] = useState<'mention' | 'channel' | null>(null);
+  const [suggestQuery, setSuggestQuery] = useState('');
+  const [suggestIndex, setSuggestIndex] = useState(0);
+  const [suggestCursorPos, setSuggestCursorPos] = useState(0);
+  const suggestRef = useRef<HTMLDivElement>(null);
 
   const relatedChannels = task.relatedChannels || [];
 
@@ -70,6 +87,91 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     }
   }, [allChannels.length, task.workspaceId]);
 
+  const fetchUsers = useCallback(async () => {
+    if (allUsers.length > 0) return;
+    try {
+      const res = await fetch(`/api/slack/users?workspaceId=${task.workspaceId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAllUsers(data);
+      }
+    } catch {
+      // ignore
+    }
+  }, [allUsers.length, task.workspaceId]);
+
+  // サジェスト候補
+  const suggestItems = suggestType === 'mention'
+    ? allUsers.filter((u) =>
+        u.name.toLowerCase().includes(suggestQuery.toLowerCase()) ||
+        u.realName.toLowerCase().includes(suggestQuery.toLowerCase()),
+      ).slice(0, 8)
+    : suggestType === 'channel'
+      ? allChannels.filter((ch) =>
+          ch.name.toLowerCase().includes(suggestQuery.toLowerCase()),
+        ).slice(0, 8)
+      : [];
+
+  // テキスト入力ハンドラ（サジェスト検出）
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newText = e.target.value;
+    setReplyText(newText);
+
+    const cursorPos = e.target.selectionStart || 0;
+
+    // カーソル位置から逆方向に @ or # を探す
+    const textBeforeCursor = newText.slice(0, cursorPos);
+
+    // @ メンション検出
+    const mentionMatch = textBeforeCursor.match(/@([^\s@]*)$/);
+    if (mentionMatch) {
+      setSuggestType('mention');
+      setSuggestQuery(mentionMatch[1]);
+      setSuggestIndex(0);
+      setSuggestCursorPos(cursorPos);
+      fetchUsers();
+      return;
+    }
+
+    // # チャネル検出
+    const channelMatch = textBeforeCursor.match(/#([^\s#]*)$/);
+    if (channelMatch) {
+      setSuggestType('channel');
+      setSuggestQuery(channelMatch[1]);
+      setSuggestIndex(0);
+      setSuggestCursorPos(cursorPos);
+      fetchChannels();
+      return;
+    }
+
+    // サジェスト閉じ
+    setSuggestType(null);
+  };
+
+  // サジェスト選択
+  const applySuggestion = (item: UserOption | ChannelOption) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+
+    const textBeforeCursor = replyText.slice(0, suggestCursorPos);
+    const textAfterCursor = replyText.slice(suggestCursorPos);
+
+    if (suggestType === 'mention') {
+      // @query → <@U123> に置換
+      const user = item as UserOption;
+      const replaced = textBeforeCursor.replace(/@[^\s@]*$/, `<@${user.id}> `);
+      setReplyText(replaced + textAfterCursor);
+    } else if (suggestType === 'channel') {
+      // #query → <#C123|name> に置換
+      const channel = item as ChannelOption;
+      const replaced = textBeforeCursor.replace(/#[^\s#]*$/, `<#${channel.id}|${channel.name}> `);
+      setReplyText(replaced + textAfterCursor);
+    }
+
+    setSuggestType(null);
+    ta.focus();
+  };
+
   const handleSend = async () => {
     if ((!replyText.trim() && attachedFiles.length === 0) || sending) return;
     setSending(true);
@@ -86,14 +188,20 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
           if (replyText.trim() && attachedFiles.indexOf(file) === 0) {
             formData.append('initialComment', replyText.trim());
           }
-          await fetch('/api/slack/files/upload', {
+          const uploadRes = await fetch('/api/slack/files/upload', {
             method: 'POST',
             body: formData,
           });
+          if (!uploadRes.ok) {
+            const err = await uploadRes.json();
+            console.error('Upload error:', err.error);
+          }
         }
         setReplyText('');
         setAttachedFiles([]);
         setSelectedCrossPostChannel(null);
+        setShowPreview(false);
+        // サーバー側で更新済みだが、念のため再取得
         await refreshThread();
       } else {
         // テキストのみの場合
@@ -124,6 +232,7 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
         if (res.ok) {
           setReplyText('');
           setSelectedCrossPostChannel(null);
+          setShowPreview(false);
           await refreshThread();
         }
       }
@@ -231,11 +340,40 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // サジェスト表示中のキー操作
+    if (suggestType && suggestItems.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestIndex((prev) => Math.min(prev + 1, suggestItems.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestIndex((prev) => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'Enter') {
+        if (!e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          applySuggestion(suggestItems[suggestIndex]);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setSuggestType(null);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
     }
   };
+
+  // プレビュー用のHTML生成
+  const previewHtml = showPreview ? parseMrkdwn(replyText) : '';
 
   return (
     <div
@@ -274,15 +412,79 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
         </div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={replyText}
-        onChange={(e) => setReplyText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="返信を入力... (Cmd+Enter で送信)"
-        rows={1}
-        className="w-full bg-[#0F1117] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 resize-none focus:outline-none focus:border-[#4A9EFF] transition"
-      />
+      {/* mrkdwn プレビュー */}
+      {showPreview && replyText.trim() && (
+        <div className="mb-1.5 p-2 rounded bg-[#0F1117] border border-white/10 max-h-24 overflow-y-auto">
+          <div
+            className="text-xs text-gray-300 break-words slack-mrkdwn"
+            dangerouslySetInnerHTML={{ __html: previewHtml }}
+          />
+        </div>
+      )}
+
+      {/* テキスト入力エリア（サジェスト付き） */}
+      <div className="relative">
+        <textarea
+          ref={textareaRef}
+          value={replyText}
+          onChange={handleTextChange}
+          onKeyDown={handleKeyDown}
+          placeholder="返信を入力... @メンション #チャネル (Cmd+Enter で送信)"
+          rows={1}
+          className="w-full bg-[#0F1117] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 resize-none focus:outline-none focus:border-[#4A9EFF] transition"
+        />
+
+        {/* サジェストポップアップ */}
+        {suggestType && suggestItems.length > 0 && (
+          <div
+            ref={suggestRef}
+            className="absolute bottom-full left-0 mb-1 w-64 bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto"
+          >
+            {suggestType === 'mention' &&
+              suggestItems.map((item, i) => {
+                const user = item as UserOption;
+                return (
+                  <button
+                    key={user.id}
+                    onClick={() => applySuggestion(user)}
+                    className={`w-full text-left flex items-center gap-2 px-3 py-1.5 text-[11px] transition ${
+                      i === suggestIndex
+                        ? 'bg-[#4A9EFF]/15 text-white'
+                        : 'text-gray-400 hover:bg-white/5'
+                    }`}
+                  >
+                    {user.avatarUrl ? (
+                      <img src={user.avatarUrl} alt="" className="w-5 h-5 rounded shrink-0" />
+                    ) : (
+                      <div className="w-5 h-5 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[8px] text-[#4A9EFF] shrink-0">
+                        {user.name.slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                    <span className="font-medium text-gray-300 truncate">{user.realName}</span>
+                    <span className="text-gray-600 text-[10px]">@{user.name}</span>
+                  </button>
+                );
+              })}
+            {suggestType === 'channel' &&
+              suggestItems.map((item, i) => {
+                const ch = item as ChannelOption;
+                return (
+                  <button
+                    key={ch.id}
+                    onClick={() => applySuggestion(ch)}
+                    className={`w-full text-left px-3 py-1.5 text-[11px] transition ${
+                      i === suggestIndex
+                        ? 'bg-[#4A9EFF]/15 text-white'
+                        : 'text-gray-400 hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="text-[#4A9EFF]">#</span> {ch.name}
+                  </button>
+                );
+              })}
+          </div>
+        )}
+      </div>
 
       {/* 隠しファイルinput */}
       <input
@@ -322,6 +524,22 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+        </button>
+
+        {/* プレビュー切り替え */}
+        <button
+          onClick={() => setShowPreview(!showPreview)}
+          className={`px-1.5 py-1 text-[10px] rounded transition ${
+            showPreview
+              ? 'bg-[#4A9EFF]/20 text-[#4A9EFF]'
+              : 'bg-white/5 text-gray-500 hover:bg-white/10 hover:text-gray-400'
+          }`}
+          title="プレビュー"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
           </svg>
         </button>
 

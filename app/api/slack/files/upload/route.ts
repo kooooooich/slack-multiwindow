@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getWorkspace, getAllWorkspaces } from '@/lib/db';
-import { getSlackClient } from '@/lib/slack';
+import { getWorkspace, getAllWorkspaces, getTaskByThread, updateTask } from '@/lib/db';
+import { getSlackClient, fetchThreadMessages } from '@/lib/slack';
 
 /**
  * ファイルアップロード API
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'channelId is required' }, { status: 400 });
     }
 
-    let botToken: string | undefined;
+    let botToken = '';
+    let userToken = '';
 
     if (workspaceId) {
       const ws = getWorkspace(workspaceId);
@@ -31,10 +32,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
       }
       botToken = ws.botToken;
+      userToken = ws.userToken || '';
     } else {
       const workspaces = getAllWorkspaces();
       if (workspaces.length > 0) {
         botToken = workspaces[0].botToken;
+        userToken = workspaces[0].userToken || '';
       }
     }
 
@@ -42,7 +45,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No bot token available' }, { status: 400 });
     }
 
-    const client = getSlackClient(botToken);
+    // userToken があればユーザー自身としてアップロード
+    const client = getSlackClient(userToken || botToken);
 
     // File を Buffer に変換
     const arrayBuffer = await file.arrayBuffer();
@@ -63,14 +67,29 @@ export async function POST(req: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const uploadResult = await client.filesUploadV2(uploadArgs as any);
 
+    // アップロード後にスレッドメッセージを更新（Slackの処理待ちのため少し遅延）
+    if (threadTs && workspaceId) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try {
+        const task = getTaskByThread(workspaceId, channelId, threadTs);
+        if (task) {
+          const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
+          updateTask(task.id, { threadMessages: messages });
+        }
+      } catch (e) {
+        console.error('Failed to refresh thread after upload:', e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       files: uploadResult.files || [],
     });
   } catch (error) {
     console.error('Failed to upload file:', error);
+    const message = error instanceof Error ? error.message : 'Failed to upload file';
     return NextResponse.json(
-      { error: 'Failed to upload file' },
+      { error: message },
       { status: 500 },
     );
   }

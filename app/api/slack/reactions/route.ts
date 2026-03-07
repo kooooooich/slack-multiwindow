@@ -13,15 +13,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // botToken を取得
+    // botToken / userToken を取得
     let botToken = '';
+    let userToken = '';
     if (workspaceId) {
       const ws = getWorkspace(workspaceId);
-      if (ws) botToken = ws.botToken;
+      if (ws) {
+        botToken = ws.botToken;
+        userToken = ws.userToken || '';
+      }
     }
     if (!botToken) {
       const workspaces = getAllWorkspaces();
-      if (workspaces.length > 0) botToken = workspaces[0].botToken;
+      if (workspaces.length > 0) {
+        botToken = workspaces[0].botToken;
+        userToken = workspaces[0].userToken || '';
+      }
     }
 
     if (!botToken) {
@@ -31,21 +38,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const client = getSlackClient(botToken);
+    // userToken があればユーザー自身としてリアクション（Bot でなくユーザーの名前で付く）
+    const client = getSlackClient(userToken || botToken);
 
     // リアクション追加 or 削除
-    if (action === 'remove') {
-      await client.reactions.remove({
-        channel: channelId,
-        timestamp: messageTs,
-        name: emojiName,
-      });
-    } else {
-      await client.reactions.add({
-        channel: channelId,
-        timestamp: messageTs,
-        name: emojiName,
-      });
+    try {
+      if (action === 'remove') {
+        await client.reactions.remove({
+          channel: channelId,
+          timestamp: messageTs,
+          name: emojiName,
+        });
+      } else {
+        await client.reactions.add({
+          channel: channelId,
+          timestamp: messageTs,
+          name: emojiName,
+        });
+      }
+    } catch (reactionError: unknown) {
+      // already_reacted / no_reaction はエラーとして返さない
+      const errMsg = reactionError instanceof Error ? reactionError.message : '';
+      if (errMsg.includes('already_reacted') || errMsg.includes('no_reaction')) {
+        console.log(`[Reactions] ${errMsg} - ignoring`);
+      } else {
+        throw reactionError;
+      }
     }
 
     // リアクション後、タスクのスレッドメッセージを再取得して更新

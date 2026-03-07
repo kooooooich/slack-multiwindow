@@ -293,6 +293,39 @@ export function parseMrkdwn(
     '<blockquote class="border-l-2 border-gray-500 pl-2 text-gray-500 italic">$1</blockquote>',
   );
 
+  // 9.5. リスト変換（箇条書き: - item, • item / 番号付き: 1. item）
+  // 連続する箇条書き行をまとめて <ul> で囲む
+  processed = processed.replace(
+    /((?:^[-•]\s+.+$\n?)+)/gm,
+    (block: string) => {
+      const items = block
+        .split('\n')
+        .filter((line: string) => line.trim())
+        .map((line: string) => {
+          const content = line.replace(/^[-•]\s+/, '');
+          return `<li>${content}</li>`;
+        })
+        .join('');
+      return `<ul class="list-disc list-inside ml-2 space-y-0.5">${items}</ul>\n`;
+    },
+  );
+
+  // 連続する番号付きリスト行をまとめて <ol> で囲む
+  processed = processed.replace(
+    /((?:^\d+[.)]\s+.+$\n?)+)/gm,
+    (block: string) => {
+      const items = block
+        .split('\n')
+        .filter((line: string) => line.trim())
+        .map((line: string) => {
+          const content = line.replace(/^\d+[.)]\s+/, '');
+          return `<li>${content}</li>`;
+        })
+        .join('');
+      return `<ol class="list-decimal list-inside ml-2 space-y-0.5">${items}</ol>\n`;
+    },
+  );
+
   // 10. 絵文字 :emoji_name:
   processed = processed.replace(/:([a-zA-Z0-9_+-]+):/g, (match, name) => {
     // カスタム絵文字チェック
@@ -307,8 +340,10 @@ export function parseMrkdwn(
     return match;
   });
 
-  // 11. 改行を <br> に変換
-  processed = processed.replace(/\n/g, '<br>');
+  // 11. 改行を <br> に変換（ただし <ul>/<ol>/<li> タグの前後は除外）
+  processed = processed.replace(/\n(?!<\/?(?:ul|ol|li))/g, '<br>');
+  // リスト系HTMLタグ前後の余分な改行を除去
+  processed = processed.replace(/\n(<\/?(?:ul|ol))/g, '$1');
 
   // 12. コードブロックを復元
   for (let i = 0; i < codeBlocks.length; i++) {

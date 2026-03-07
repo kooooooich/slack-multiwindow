@@ -123,6 +123,7 @@ export async function startSlackBolt(): Promise<boolean> {
         { channel: channelId, thread_ts: msg.thread_ts, ts, user: msg.user, text },
         context,
         ws.id,
+        targetUserId || undefined,
       );
     }
   });
@@ -171,8 +172,18 @@ async function handleUserMention(
   if (existing) {
     // スレッドメッセージを更新
     const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-    updateTask(existing.id, { threadMessages: messages });
-    notifyListeners('task_updated', { taskId: existing.id });
+    const updates: Partial<Task> = { threadMessages: messages };
+
+    // 完了済みタスクにメンションがあった場合は再オープン
+    if (existing.status === 'completed') {
+      updates.status = 'open';
+      updates.completedAt = undefined;
+      updates.isMinimized = false;
+      console.log(`[Bolt] Reopening completed task due to mention: ${existing.id}`);
+    }
+
+    updateTask(existing.id, updates);
+    notifyListeners('task_updated', { taskId: existing.id, reopened: existing.status === 'completed' });
     return;
   }
 
@@ -231,10 +242,12 @@ async function handleThreadReply(
   event: ThreadReplyEvent,
   context: { botToken?: string },
   workspaceId: string,
+  targetUserId?: string,
 ) {
   const botToken = context.botToken || '';
   const channelId = event.channel || '';
   const threadTs = event.thread_ts || '';
+  const text = event.text || '';
 
   // このスレッドに対するタスクが存在するか確認
   const existing = getTaskByThread(workspaceId, channelId, threadTs);
@@ -242,7 +255,17 @@ async function handleThreadReply(
 
   // スレッドメッセージを更新
   const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-  updateTask(existing.id, { threadMessages: messages });
-  notifyListeners('task_updated', { taskId: existing.id });
+  const updates: Partial<Task> = { threadMessages: messages };
+
+  // 完了済みタスクで、ターゲットユーザーへのメンションがある場合は再オープン
+  if (existing.status === 'completed' && targetUserId && text.includes(`<@${targetUserId}>`)) {
+    updates.status = 'open';
+    updates.completedAt = undefined;
+    updates.isMinimized = false;
+    console.log(`[Bolt] Reopening completed task due to thread mention: ${existing.id}`);
+  }
+
+  updateTask(existing.id, updates);
+  notifyListeners('task_updated', { taskId: existing.id, reopened: existing.status === 'completed' && updates.status === 'open' });
   console.log(`[Bolt] Thread reply updated task: ${existing.id}`);
 }
