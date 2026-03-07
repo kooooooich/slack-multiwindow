@@ -62,10 +62,13 @@ function initTables(db: Database.Database) {
     );
   `);
 
-  // 既存DBのマイグレーション: user_id カラムがなければ追加
+  // 既存DBのマイグレーション
   const columns = db.prepare("PRAGMA table_info(workspaces)").all() as { name: string }[];
   if (!columns.some((c) => c.name === 'user_id')) {
     db.exec('ALTER TABLE workspaces ADD COLUMN user_id TEXT');
+  }
+  if (!columns.some((c) => c.name === 'last_scan_at')) {
+    db.exec('ALTER TABLE workspaces ADD COLUMN last_scan_at TEXT');
   }
 }
 
@@ -160,7 +163,12 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     teamId: row.team_id || '',
     isActive: row.is_active === 1,
     addedAt: row.added_at,
+    lastScanAt: row.last_scan_at || undefined,
   };
+}
+
+export function updateWorkspaceScanTime(id: string, scanAt: string): void {
+  getDb().prepare('UPDATE workspaces SET last_scan_at = ? WHERE id = ?').run(scanAt, id);
 }
 
 // --- User-scoped queries ---

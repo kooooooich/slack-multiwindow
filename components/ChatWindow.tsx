@@ -1,51 +1,122 @@
 'use client';
 
-import { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import MessageComposer from './MessageComposer';
+import type { MessageComposerHandle } from './MessageComposer';
 import AiAssistPanel from './AiAssistPanel';
+import SlackMessageText from './SlackMessageText';
+import EmojiPicker from './EmojiPicker';
+import FileAttachment from './FileAttachment';
+import ChannelBrowser from './ChannelBrowser';
+import { resolveEmoji } from '@/lib/mrkdwn';
 import type { Task, SlackMessage } from '@/types';
 
-// よく使うSlack絵文字のプリセット
-const COMMON_EMOJIS = [
-  { name: 'thumbsup', emoji: '\u{1F44D}' },
-  { name: 'thumbsdown', emoji: '\u{1F44E}' },
-  { name: 'heart', emoji: '\u{2764}\u{FE0F}' },
-  { name: 'eyes', emoji: '\u{1F440}' },
-  { name: 'white_check_mark', emoji: '\u{2705}' },
-  { name: 'rocket', emoji: '\u{1F680}' },
-  { name: 'tada', emoji: '\u{1F389}' },
-  { name: 'pray', emoji: '\u{1F64F}' },
-  { name: 'fire', emoji: '\u{1F525}' },
-  { name: 'thinking_face', emoji: '\u{1F914}' },
-  { name: 'clap', emoji: '\u{1F44F}' },
-  { name: 'smile', emoji: '\u{1F604}' },
-] as const;
-
-// emoji name -> Unicode マッピング
-const emojiMap: Record<string, string> = {};
-for (const e of COMMON_EMOJIS) {
-  emojiMap[e.name] = e.emoji;
+// メモ化されたメッセージリストコンポーネント
+interface MessageListProps {
+  messages: SlackMessage[];
+  emojiPickerMsgTs: string | null;
+  setEmojiPickerMsgTs: (ts: string | null) => void;
+  handleReactionAdd: (msg: SlackMessage, emojiName: string) => void;
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  customEmojis?: Record<string, string>;
+  workspaceId?: string;
 }
-// エイリアス
-emojiMap['+1'] = '\u{1F44D}';
-emojiMap['-1'] = '\u{1F44E}';
-emojiMap['heavy_check_mark'] = '\u{2714}\u{FE0F}';
-emojiMap['100'] = '\u{1F4AF}';
-emojiMap['ok_hand'] = '\u{1F44C}';
-emojiMap['raised_hands'] = '\u{1F64C}';
-emojiMap['muscle'] = '\u{1F4AA}';
-emojiMap['star'] = '\u{2B50}';
-emojiMap['sparkles'] = '\u{2728}';
-emojiMap['wave'] = '\u{1F44B}';
-emojiMap['laughing'] = '\u{1F606}';
-emojiMap['joy'] = '\u{1F602}';
-emojiMap['sweat_smile'] = '\u{1F605}';
-emojiMap['sob'] = '\u{1F62D}';
-emojiMap['skull'] = '\u{1F480}';
-emojiMap['warning'] = '\u{26A0}\u{FE0F}';
-emojiMap['bulb'] = '\u{1F4A1}';
-emojiMap['memo'] = '\u{1F4DD}';
+
+const MessageList = React.memo(function MessageList({
+  messages,
+  emojiPickerMsgTs,
+  setEmojiPickerMsgTs,
+  handleReactionAdd,
+  messagesEndRef,
+  customEmojis,
+  workspaceId,
+}: MessageListProps) {
+  return (
+    <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      {messages.map((msg, i) => (
+        <div key={msg.id || i} className="flex gap-2 group relative">
+          {/* アバター */}
+          {msg.avatarUrl ? (
+            <img
+              src={msg.avatarUrl}
+              alt={msg.userName}
+              className="w-8 h-8 rounded shrink-0 mt-0.5"
+            />
+          ) : (
+            <div className="w-8 h-8 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0 mt-0.5">
+              {(msg.userName || '??').slice(0, 2).toUpperCase()}
+            </div>
+          )}
+
+          {/* メッセージ内容 */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-xs font-semibold text-gray-300">
+                {msg.userName}
+              </span>
+              <span className="text-[10px] text-gray-600">
+                {formatSlackTs(msg.ts)}
+              </span>
+            </div>
+            <SlackMessageText text={msg.text} customEmojis={customEmojis} />
+
+            {/* ファイル添付表示 */}
+            {msg.files && msg.files.length > 0 && (
+              <FileAttachment files={msg.files} workspaceId={msg.workspaceId} />
+            )}
+
+            {/* リアクション表示 */}
+            {msg.reactions && msg.reactions.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {msg.reactions.map((reaction) => {
+                  const resolved = resolveEmoji(reaction.name, customEmojis);
+                  return (
+                    <span
+                      key={reaction.name}
+                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] bg-white/5 border border-white/10 text-gray-400"
+                      title={`:${reaction.name}: (${reaction.count})`}
+                    >
+                      <span>
+                        {resolved?.type === 'unicode' ? resolved.value :
+                         resolved?.type === 'custom' ? <img src={resolved.url} alt={`:${reaction.name}:`} className="inline-block w-4 h-4" /> :
+                         `:${reaction.name}:`}
+                      </span>
+                      <span className="text-gray-500">{reaction.count}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* リアクション追加ボタン（ホバー時表示） */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setEmojiPickerMsgTs(emojiPickerMsgTs === msg.ts ? null : msg.ts);
+            }}
+            className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 flex items-center justify-center rounded bg-[#1A1D27] hover:bg-white/10 text-gray-500 hover:text-gray-300 text-xs border border-white/10"
+            title="リアクションを追加"
+          >
+            <span className="text-[11px]">{'\u{1F642}'}</span>
+          </button>
+
+          {/* 絵文字ピッカー */}
+          {emojiPickerMsgTs === msg.ts && (
+            <EmojiPicker
+              onSelect={(emojiName) => handleReactionAdd(msg, emojiName)}
+              onClose={() => setEmojiPickerMsgTs(null)}
+              workspaceId={workspaceId}
+              customEmojis={customEmojis}
+            />
+          )}
+        </div>
+      ))}
+      <div ref={messagesEndRef} />
+    </div>
+  );
+});
 
 interface ChatWindowProps {
   task: Task;
@@ -65,36 +136,54 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
 
   const windowRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<MessageComposerHandle>(null);
   const [pos, setPos] = useState(task.windowPosition);
   const [size, setSize] = useState(task.windowSize);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
-  const [replyText, setReplyText] = useState('');
   const [emojiPickerMsgTs, setEmojiPickerMsgTs] = useState<string | null>(null);
-  const emojiPickerRef = useRef<HTMLDivElement>(null);
+  // タブ管理: 'thread' | channelId
+  const [activeTab, setActiveTab] = useState<string>('thread');
+  // 関連チャンネル名のキャッシュ
+  const [channelNames, setChannelNames] = useState<Record<string, string>>({});
   const dragOffset = useRef({ x: 0, y: 0 });
   const posRef = useRef(pos);
   const sizeRef = useRef(size);
   posRef.current = pos;
   sizeRef.current = size;
 
+  // 関連チャンネル名を取得
+  useEffect(() => {
+    const relatedChannels = task.relatedChannels || [];
+    const unknownIds = relatedChannels.filter((id) => !channelNames[id]);
+    if (unknownIds.length === 0) return;
+
+    fetch(`/api/slack/channels?workspaceId=${task.workspaceId}`)
+      .then((res) => res.json())
+      .then((channels: { id: string; name: string }[]) => {
+        const nameMap: Record<string, string> = {};
+        for (const ch of channels) {
+          if (unknownIds.includes(ch.id)) {
+            nameMap[ch.id] = ch.name;
+          }
+        }
+        setChannelNames((prev) => ({ ...prev, ...nameMap }));
+      })
+      .catch(() => {});
+  }, [task.relatedChannels, task.workspaceId, channelNames]);
+
+  // タブが削除された関連チャンネルを指している場合はスレッドに戻す
+  useEffect(() => {
+    if (activeTab !== 'thread' && !(task.relatedChannels || []).includes(activeTab)) {
+      setActiveTab('thread');
+    }
+  }, [task.relatedChannels, activeTab]);
+
   // 新しいメッセージが来たらスクロール
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [task.threadMessages.length]);
-
-  // 絵文字ピッカー外クリックで閉じる
-  useEffect(() => {
-    if (!emojiPickerMsgTs) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
-        setEmojiPickerMsgTs(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [emojiPickerMsgTs]);
 
   // ドラッグ開始
   const handleDragStart = useCallback(
@@ -246,112 +335,74 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         </div>
       </div>
 
-      {/* メッセージ表示エリア */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.map((msg, i) => (
-          <div key={msg.id || i} className="flex gap-2 group relative">
-            {/* アバター */}
-            {msg.avatarUrl ? (
-              <img
-                src={msg.avatarUrl}
-                alt={msg.userName}
-                className="w-8 h-8 rounded shrink-0 mt-0.5"
-              />
-            ) : (
-              <div className="w-8 h-8 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0 mt-0.5">
-                {(msg.userName || '??').slice(0, 2).toUpperCase()}
-              </div>
-            )}
-
-            {/* メッセージ内容 */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-2">
-                <span className="text-xs font-semibold text-gray-300">
-                  {msg.userName}
-                </span>
-                <span className="text-[10px] text-gray-600">
-                  {formatSlackTs(msg.ts)}
-                </span>
-              </div>
-              <div className="text-xs text-gray-400 mt-0.5 break-words whitespace-pre-wrap">
-                {formatMessageText(msg.text)}
-              </div>
-
-              {/* リアクション表示 */}
-              {msg.reactions && msg.reactions.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {msg.reactions.map((reaction) => (
-                    <span
-                      key={reaction.name}
-                      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] bg-white/5 border border-white/10 text-gray-400"
-                      title={`:${reaction.name}: (${reaction.count})`}
-                    >
-                      <span>{emojiMap[reaction.name] || `:${reaction.name}:`}</span>
-                      <span className="text-gray-500">{reaction.count}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* リアクション追加ボタン（ホバー時表示） */}
+      {/* 関連チャンネルタブバー */}
+      {(task.relatedChannels || []).length > 0 && (
+        <div className="flex items-center bg-[#161929] border-b border-white/5 px-2 shrink-0 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('thread')}
+            className={`px-2.5 py-1.5 text-[10px] whitespace-nowrap transition border-b-2 ${
+              activeTab === 'thread'
+                ? 'text-[#4A9EFF] border-[#4A9EFF]'
+                : 'text-gray-500 border-transparent hover:text-gray-400 hover:border-white/10'
+            }`}
+          >
+            スレッド
+          </button>
+          {(task.relatedChannels || []).map((chId) => (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setEmojiPickerMsgTs(emojiPickerMsgTs === msg.ts ? null : msg.ts);
-              }}
-              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 flex items-center justify-center rounded bg-[#1A1D27] hover:bg-white/10 text-gray-500 hover:text-gray-300 text-xs border border-white/10"
-              title="リアクションを追加"
+              key={chId}
+              onClick={() => setActiveTab(chId)}
+              className={`px-2.5 py-1.5 text-[10px] whitespace-nowrap transition border-b-2 ${
+                activeTab === chId
+                  ? 'text-orange-400 border-orange-400'
+                  : 'text-gray-500 border-transparent hover:text-gray-400 hover:border-white/10'
+              }`}
             >
-              <span className="text-[11px]">{'\u{1F642}'}</span>
+              #{channelNames[chId] || chId.slice(0, 6)}
             </button>
-
-            {/* 絵文字ピッカー */}
-            {emojiPickerMsgTs === msg.ts && (
-              <div
-                ref={emojiPickerRef}
-                className="absolute top-0 right-8 z-50 bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl p-2"
-              >
-                <div className="grid grid-cols-6 gap-0.5">
-                  {COMMON_EMOJIS.map(({ name, emoji }) => (
-                    <button
-                      key={name}
-                      onClick={() => {
-                        handleReactionAdd(msg, name);
-                        setEmojiPickerMsgTs(null);
-                      }}
-                      className="w-7 h-7 flex items-center justify-center rounded hover:bg-white/10 text-sm transition"
-                      title={`:${name}:`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* 返信エリア */}
-      {task.status === 'open' && (
-        <MessageComposer
-          task={task}
-          onAiAssist={() => setShowAiPanel(!showAiPanel)}
-          replyText={replyText}
-          setReplyText={setReplyText}
-        />
+          ))}
+        </div>
       )}
 
-      {/* AI補助パネル */}
-      {showAiPanel && task.status === 'open' && (
-        <AiAssistPanel
-          task={task}
-          onUseSuggestion={(text) => {
-            setReplyText(text);
-            setShowAiPanel(false);
-          }}
+      {/* コンテンツエリア */}
+      {activeTab === 'thread' ? (
+        <>
+          {/* メッセージ表示エリア */}
+          <MessageList
+            messages={messages}
+            emojiPickerMsgTs={emojiPickerMsgTs}
+            setEmojiPickerMsgTs={setEmojiPickerMsgTs}
+            handleReactionAdd={handleReactionAdd}
+            messagesEndRef={messagesEndRef}
+            workspaceId={task.workspaceId}
+          />
+
+          {/* 返信エリア */}
+          {task.status === 'open' && (
+            <MessageComposer
+              ref={composerRef}
+              task={task}
+              onAiAssist={() => setShowAiPanel(!showAiPanel)}
+            />
+          )}
+
+          {/* AI補助パネル */}
+          {showAiPanel && task.status === 'open' && (
+            <AiAssistPanel
+              task={task}
+              onUseSuggestion={(text) => {
+                composerRef.current?.setReplyText(text);
+                setShowAiPanel(false);
+              }}
+            />
+          )}
+        </>
+      ) : (
+        /* 関連チャンネルブラウザ */
+        <ChannelBrowser
+          workspaceId={task.workspaceId}
+          channelId={activeTab}
+          channelName={channelNames[activeTab] || activeTab.slice(0, 6)}
         />
       )}
 
@@ -386,10 +437,3 @@ function formatSlackTs(ts: string): string {
   }
 }
 
-function formatMessageText(text: string): string {
-  // 解決済みメンション: <@U12345|Real Name> -> @Real Name
-  // 未解決メンション: <@U12345> -> @U12345
-  return text
-    .replace(/<@([A-Z0-9]+)\|([^>]+)>/g, '@$2')
-    .replace(/<@([A-Z0-9]+)>/g, '@$1');
-}

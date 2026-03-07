@@ -43,6 +43,8 @@ export default function Home() {
     await loadData();
   }, []);
 
+  const [scanning, setScanning] = useState(false);
+
   const loadData = useCallback(async () => {
     try {
       const [wsRes, taskRes] = await Promise.all([
@@ -66,6 +68,30 @@ export default function Home() {
           setTasks(taskData);
         }
         setMode('app');
+
+        // ログイン時の未読メンションスキャン（バックグラウンド）
+        setScanning(true);
+        fetch('/api/slack/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+          .then((res) => res.json())
+          .then((result) => {
+            if (result.totalCreated > 0) {
+              // 新しいタスクが作成された場合、タスク一覧を再取得
+              fetch('/api/tasks')
+                .then((res) => res.json())
+                .then((tasks) => {
+                  if (Array.isArray(tasks)) {
+                    setTasks(tasks);
+                  }
+                })
+                .catch(() => {});
+            }
+          })
+          .catch(() => {})
+          .finally(() => setScanning(false));
       } else {
         setMode('setup');
       }
@@ -205,6 +231,7 @@ export default function Home() {
           }
         }}
         session={session}
+        scanning={scanning}
       />
 
       {/* メインコンテンツ */}
@@ -223,6 +250,7 @@ function Header({
   onOpenSettings,
   onLogout,
   session,
+  scanning,
 }: {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
@@ -230,6 +258,7 @@ function Header({
   onOpenSettings: () => void;
   onLogout: () => void;
   session?: { user?: { name?: string | null; image?: string | null } } | null;
+  scanning?: boolean;
 }) {
   const openCount = useAppStore((s) => s.tasks.filter((t) => t.status === 'open').length);
 
@@ -238,6 +267,11 @@ function Header({
       {/* ロゴ + 接続インジケーター */}
       <div className="flex items-center gap-2 mr-6">
         <div className="w-2 h-2 rounded-full bg-[#2ECC71] animate-pulse-dot" title="接続中" />
+        {scanning && (
+          <span className="text-[10px] text-yellow-400 bg-yellow-400/10 px-1.5 py-0.5 rounded animate-pulse">
+            スキャン中...
+          </span>
+        )}
         <h1 className="text-sm font-bold text-white tracking-wide">
           Slack Multi-Window
         </h1>

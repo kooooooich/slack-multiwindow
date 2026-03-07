@@ -30,12 +30,23 @@ export interface Workspace {
   teamId: string;
   addedAt: string;
   isActive: boolean;
+  lastScanAt?: string;    // 最後のメンションスキャン日時
 }
 
 export interface SlackReaction {
   name: string;       // emoji name without colons, e.g. "thumbsup"
   count: number;
   users: string[];    // user IDs who reacted
+}
+
+export interface SlackFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+  urlPrivate: string;       // Slack private URL（認証が必要）
+  thumbUrl?: string;         // サムネイル URL
+  permalink?: string;
 }
 
 export interface SlackMessage {
@@ -52,6 +63,7 @@ export interface SlackMessage {
   isDirectMention: boolean;
   isThreadParticipant: boolean;
   reactions?: SlackReaction[];  // reactions on this message
+  files?: SlackFile[];          // file attachments
 }
 
 export interface Task {
@@ -106,4 +118,5 @@ export interface WorkspaceRow {
   team_id: string | null;
   is_active: number;
   added_at: string;
+  last_scan_at: string | null;
 }

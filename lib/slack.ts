@@ -1,5 +1,5 @@
 import { WebClient } from '@slack/web-api';
-import type { SlackMessage } from '@/types';
+import type { SlackMessage, SlackFile } from '@/types';
 
 const clientCache = new Map<string, WebClient>();
 
@@ -131,6 +131,29 @@ export async function fetchThreadMessages(
       users: string[];
     }> | undefined;
 
+    // ファイル添付を解析
+    const rawFiles = msg.files as Array<{
+      id: string;
+      name: string;
+      mimetype: string;
+      size: number;
+      url_private: string;
+      thumb_360?: string;
+      thumb_480?: string;
+      thumb_160?: string;
+      permalink?: string;
+    }> | undefined;
+
+    const files: SlackFile[] | undefined = rawFiles?.map((f) => ({
+      id: f.id,
+      name: f.name || 'unknown',
+      mimetype: f.mimetype || 'application/octet-stream',
+      size: f.size || 0,
+      urlPrivate: f.url_private || '',
+      thumbUrl: f.thumb_360 || f.thumb_480 || f.thumb_160 || undefined,
+      permalink: f.permalink || undefined,
+    }));
+
     return {
       id: `${channelId}-${msg.ts}`,
       workspaceId,
@@ -149,6 +172,7 @@ export async function fetchThreadMessages(
         count: r.count,
         users: r.users,
       })) || [],
+      files: files && files.length > 0 ? files : undefined,
     };
   });
 }
@@ -242,6 +266,107 @@ export async function joinAllChannels(
 
   console.log(`[Slack] Auto-join: ${joined.length} joined, ${alreadyIn.length} already in, ${failed.length} failed`);
   return { joined, alreadyIn, failed };
+}
+
+// --- Channel Messages (non-thread) ---
+
+export async function fetchChannelMessages(
+  botToken: string,
+  channelId: string,
+  workspaceId: string,
+  cursor?: string,
+  limit: number = 20,
+): Promise<{ messages: SlackMessage[]; nextCursor?: string; channelName: string }> {
+  const client = getSlackClient(botToken);
+
+  // チャンネル名を取得
+  let channelName = channelId;
+  try {
+    const chInfo = await client.conversations.info({ channel: channelId });
+    channelName = (chInfo.channel as { name?: string })?.name || channelId;
+  } catch {
+    // ignore
+  }
+
+  const result = await client.conversations.history({
+    channel: channelId,
+    limit,
+    ...(cursor ? { cursor } : {}),
+  });
+
+  if (!result.messages) return { messages: [], channelName };
+
+  // ユーザーIDを収集
+  const userIds = new Set<string>();
+  for (const msg of result.messages) {
+    if (msg.user) userIds.add(msg.user);
+    const reactions = msg.reactions as Array<{ users?: string[] }> | undefined;
+    if (reactions) {
+      for (const r of reactions) {
+        for (const u of r.users || []) userIds.add(u);
+      }
+    }
+    const mentions = (msg.text || '').matchAll(/<@([A-Z0-9]+)>/g);
+    for (const m of mentions) userIds.add(m[1]);
+  }
+
+  // 一括でプロフィール解決
+  const profiles = await resolveUserProfiles(botToken, [...userIds]);
+
+  const messages: SlackMessage[] = result.messages.map((msg) => {
+    const profile = profiles.get(msg.user || '');
+    const rawReactions = msg.reactions as Array<{
+      name: string;
+      count: number;
+      users: string[];
+    }> | undefined;
+
+    const rawFiles = msg.files as Array<{
+      id: string;
+      name: string;
+      mimetype: string;
+      size: number;
+      url_private: string;
+      thumb_360?: string;
+      thumb_480?: string;
+      thumb_160?: string;
+      permalink?: string;
+    }> | undefined;
+
+    const files: SlackFile[] | undefined = rawFiles?.map((f) => ({
+      id: f.id,
+      name: f.name || 'unknown',
+      mimetype: f.mimetype || 'application/octet-stream',
+      size: f.size || 0,
+      urlPrivate: f.url_private || '',
+      thumbUrl: f.thumb_360 || f.thumb_480 || f.thumb_160 || undefined,
+      permalink: f.permalink || undefined,
+    }));
+
+    return {
+      id: `${channelId}-${msg.ts}`,
+      workspaceId,
+      channelId,
+      channelName,
+      threadTs: (msg as { thread_ts?: string }).thread_ts || undefined,
+      ts: msg.ts || '',
+      userId: msg.user || msg.bot_id || '',
+      userName: profile?.displayName || msg.user || msg.bot_id || 'unknown',
+      avatarUrl: profile?.avatarUrl || '',
+      text: resolveMentionsInText(msg.text || '', profiles),
+      isDirectMention: false,
+      isThreadParticipant: false,
+      reactions: rawReactions?.map((r) => ({
+        name: r.name,
+        count: r.count,
+        users: r.users,
+      })) || [],
+      files: files && files.length > 0 ? files : undefined,
+    };
+  });
+
+  const nextCursor = result.response_metadata?.next_cursor || undefined;
+  return { messages, nextCursor, channelName };
 }
 
 export async function listChannels(
