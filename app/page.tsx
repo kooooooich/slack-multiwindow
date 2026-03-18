@@ -14,7 +14,6 @@ import type { Workspace } from '@/types';
 
 export default function Home() {
   const [mode, setMode] = useState<'loading' | 'login' | 'setup' | 'app'>('loading');
-  const [authMode, setAuthMode] = useState<'google' | 'password' | 'none'>('none');
   const setWorkspaces = useAppStore((s) => s.setWorkspaces);
   const setActiveWorkspaceId = useAppStore((s) => s.setActiveWorkspaceId);
   const setTasks = useAppStore((s) => s.setTasks);
@@ -80,19 +79,14 @@ export default function Home() {
       const authRes = await fetch('/api/auth/status');
       if (authRes.ok) {
         const authData = await authRes.json();
-        setAuthMode(authData.authMode || 'none');
-
-        if (authData.authMode === 'google' && !authData.authenticated) {
-          setMode('login');
-          return;
-        }
-        if (authData.authMode === 'password' && authData.passwordRequired && !authData.authenticated) {
+        if (!authData.authenticated) {
           setMode('login');
           return;
         }
       }
     } catch {
-      // 認証チェック失敗はスルー（ローカル開発時）
+      setMode('login');
+      return;
     }
 
     await loadData();
@@ -114,7 +108,7 @@ export default function Home() {
   }
 
   if (mode === 'login') {
-    return <LoginScreen onLogin={() => loadData()} authMode={authMode === 'none' ? 'password' : authMode} />;
+    return <LoginScreen onLogin={() => loadData()} />;
   }
 
   if (mode === 'setup') {
@@ -135,12 +129,7 @@ export default function Home() {
         onChangeWorkspace={setActiveWorkspaceId}
         onOpenSettings={() => setMode('setup')}
         onLogout={async () => {
-          if (authMode === 'google') {
-            await signOut({ callbackUrl: '/' });
-          } else {
-            await fetch('/api/auth/password', { method: 'DELETE' });
-            setMode('login');
-          }
+          await signOut({ callbackUrl: '/' });
         }}
         session={session}
         scanning={scanning}

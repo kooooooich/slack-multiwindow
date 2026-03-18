@@ -49,13 +49,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   },
 });
 
-/** 環境変数から認証モードを判定 */
-export function getAuthMode(): 'google' | 'password' | 'none' {
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    return 'google';
-  }
-  if (process.env.APP_PASSWORD) {
-    return 'password';
-  }
-  return 'none';
+/** セッションからユーザーIDを取得するヘルパー */
+export async function getSessionUserId(): Promise<string | null> {
+  const session = await auth();
+  return (session as unknown as Record<string, unknown>)?.userId as string | null;
 }

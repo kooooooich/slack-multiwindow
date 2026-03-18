@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllWorkspaces, getWorkspacesByUserId, createWorkspace, deleteWorkspace } from '@/lib/db';
-import { auth, getAuthMode } from '@/lib/auth';
+import { getWorkspacesByUserId, createWorkspace, deleteWorkspace } from '@/lib/db';
+import { getSessionUserId } from '@/lib/auth';
 import { WebClient } from '@slack/web-api';
 import { v4 as uuidv4 } from 'uuid';
-
-async function getSessionUserId(): Promise<string | null> {
-  if (getAuthMode() !== 'google') return null;
-  const session = await auth();
-  return (session as unknown as Record<string, unknown>)?.userId as string | null;
-}
 
 export async function GET() {
   try {
     const userId = await getSessionUserId();
-    const workspaces = userId ? getWorkspacesByUserId(userId) : getAllWorkspaces();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const workspaces = getWorkspacesByUserId(userId);
     // トークンを隠してレスポンス
     const safe = workspaces.map((ws) => ({
       ...ws,
@@ -55,6 +52,9 @@ export async function POST(req: NextRequest) {
     }
 
     const userId = await getSessionUserId();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
     const workspace = createWorkspace({
       id: uuidv4(),

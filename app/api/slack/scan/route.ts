@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getWorkspace,
-  getAllWorkspaces,
   getWorkspacesByUserId,
-  getAllTasks,
   getTasksByUserId,
   getTaskByThread,
   createTask,
@@ -13,7 +11,7 @@ import {
 import { scanUnreadMentions, scanDMs } from '@/lib/unread-scan';
 import { fetchThreadMessages } from '@/lib/slack';
 import { notifyListeners } from '@/lib/bolt-server';
-import { auth, getAuthMode } from '@/lib/auth';
+import { getSessionUserId } from '@/lib/auth';
 import { v4 as uuidv4 } from 'uuid';
 import type { Task } from '@/types';
 
@@ -30,6 +28,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const { workspaceId } = body as { workspaceId?: string };
 
+    // ユーザーID取得
+    const userId = await getSessionUserId();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     // 対象ワークスペースを決定
     let workspaces;
     if (workspaceId) {
@@ -39,25 +43,11 @@ export async function POST(req: NextRequest) {
       }
       workspaces = [ws];
     } else {
-      // ユーザースコープ
-      if (getAuthMode() === 'google') {
-        const session = await auth();
-        const userId = (session as unknown as Record<string, unknown>)?.userId as string | null;
-        workspaces = userId ? getWorkspacesByUserId(userId) : getAllWorkspaces();
-      } else {
-        workspaces = getAllWorkspaces();
-      }
+      workspaces = getWorkspacesByUserId(userId);
     }
 
     // 既存タスクの thread_ts を取得（重複防止用）
-    let existingTasks: Task[];
-    if (getAuthMode() === 'google') {
-      const session = await auth();
-      const userId = (session as unknown as Record<string, unknown>)?.userId as string | null;
-      existingTasks = userId ? getTasksByUserId(userId) : getAllTasks();
-    } else {
-      existingTasks = getAllTasks();
-    }
+    const existingTasks: Task[] = getTasksByUserId(userId);
 
     const existingThreadTs = new Set(
       existingTasks.map((t) => t.threadTs),

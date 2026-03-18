@@ -18,10 +18,23 @@ unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL && pnpm dev
 ## Tech Stack
 
 - Next.js 16 (Turbopack, App Router)
-- Slack Web API + Bolt (Socket Mode)
+- Slack Web API + Bolt (Socket Mode専用)
 - SQLite (better-sqlite3)
 - Anthropic Claude API (@anthropic-ai/sdk)
 - pdf-parse / officeparser（ドキュメントテキスト抽出）
+
+## Authentication
+
+- **Google OAuth のみ**（NextAuth v5）
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL` が必須
+- 全APIルートはユーザースコープ（`getSessionUserId()` でフィルタ）
+
+## Slack Connection
+
+- **Socket Mode 専用**（Events API は非対応）
+- App-level token (`xapp-`) が必須
+- `lib/bolt-server.ts` で WebSocket 接続を管理
+- Thread Poller がSocket Mode障害時のフォールバックとして動作
 
 ## Database
 
@@ -49,7 +62,7 @@ unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL && pnpm dev
 
 ### タスク更新順ソート
 - タスクは `last_activity_at` で降順ソート（最新が左上/リスト上位）
-- DB側（`getAllTasks` 等）とフロント側（`TaskBoard`, `WindowManager`）の両方でソート
+- DB側（`getTasksByUserId` 等）とフロント側（`TaskBoard`, `WindowManager`）の両方でソート
 - 新メッセージ受信時に `last_activity_at` が自動更新される
 
 ### タスクウィンドウ自動展開

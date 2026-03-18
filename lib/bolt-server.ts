@@ -68,8 +68,6 @@ export async function startSlackBolt(): Promise<boolean> {
 
   // 最初のワークスペースの設定を使用（マルチワークスペースは将来対応）
   const ws = workspaces[0];
-  const useSocketMode = !!ws.appToken || !!process.env.SLACK_APP_TOKEN;
-
   const appToken = ws.appToken || process.env.SLACK_APP_TOKEN;
   const botToken = ws.botToken || process.env.SLACK_BOT_TOKEN;
   const signingSecret = ws.signingSecret || process.env.SLACK_SIGNING_SECRET;
@@ -80,28 +78,26 @@ export async function startSlackBolt(): Promise<boolean> {
     return false;
   }
 
+  if (!appToken) {
+    console.log('[Bolt] Missing app token (xapp-). Socket Mode requires an app-level token. Skipping.');
+    return false;
+  }
+
   if (!targetUserId) {
     console.log('[Bolt] No target user ID configured. Mention detection disabled.');
   } else {
     console.log(`[Bolt] Monitoring mentions for user: ${targetUserId}`);
   }
 
-  const appConfig: ConstructorParameters<typeof App>[0] = {
+  console.log('[Bolt] Starting in Socket Mode...');
+
+  boltApp = new App({
     token: botToken,
     signingSecret,
+    socketMode: true,
+    appToken,
     logLevel: LogLevel.INFO,
-  };
-
-  if (useSocketMode && appToken) {
-    appConfig.socketMode = true;
-    appConfig.appToken = appToken;
-    console.log('[Bolt] Starting in Socket Mode...');
-  } else {
-    console.log('[Bolt] Starting in Events API mode...');
-    console.log('[Bolt] Events will be received via /api/slack/events');
-  }
-
-  boltApp = new App(appConfig);
+  });
 
   // --- グローバルミドルウェア: 全イベントログ + 健全性追跡 ---
   boltApp.use(async ({ body, next }) => {
@@ -170,13 +166,10 @@ export async function startSlackBolt(): Promise<boolean> {
   });
 
   // Socket Mode の障害時フォールバックとしてスレッドポーラーを起動
-  // boltApp.start() より先に起動することで、Socket Mode接続失敗時もポーラーが動作する
   startThreadPoller();
 
-  if (useSocketMode) {
-    await boltApp.start();
-    console.log('[Bolt] Socket Mode app started successfully');
-  }
+  await boltApp.start();
+  console.log('[Bolt] Socket Mode app started successfully');
 
   return true;
 }

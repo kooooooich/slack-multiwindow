@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllTasks, getTasksByUserId, updateTask, deleteTask } from '@/lib/db';
-import { auth, getAuthMode } from '@/lib/auth';
+import { getTasksByUserId, updateTask, deleteTask } from '@/lib/db';
+import { getSessionUserId } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    let tasks;
-    if (getAuthMode() === 'google') {
-      const session = await auth();
-      const userId = (session as unknown as Record<string, unknown>)?.userId as string | null;
-      tasks = userId ? getTasksByUserId(userId) : getAllTasks();
-    } else {
-      tasks = getAllTasks();
+    const userId = await getSessionUserId();
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const tasks = getTasksByUserId(userId);
     return NextResponse.json(tasks, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
