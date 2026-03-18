@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useAppStore } from '@/lib/store';
 import { parseMrkdwn } from '@/lib/mrkdwn';
+import EmojiPicker from './EmojiPicker';
 import type { Task } from '@/types';
 
 interface MessageComposerProps {
@@ -17,6 +18,7 @@ export interface MessageComposerHandle {
 interface ChannelOption {
   id: string;
   name: string;
+  type?: 'channel' | 'dm' | 'group_dm';
 }
 
 interface UserOption {
@@ -34,8 +36,11 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
   const [sending, setSending] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [showPreview, setShowPreview] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [customEmojis, setCustomEmojis] = useState<Record<string, string>>({});
   const completeTask = useAppStore((s) => s.completeTask);
   const updateTaskStore = useAppStore((s) => s.updateTask);
+  const openWindowStore = useAppStore((s) => s.openWindow);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,15 +49,8 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     setReplyText: (text: string) => setReplyText(text),
   }), []);
 
-  // 関連チャネル
-  const [showChannelDropdown, setShowChannelDropdown] = useState(false);
-  const [showChannelSearch, setShowChannelSearch] = useState(false);
-  const [channelSearchQuery, setChannelSearchQuery] = useState('');
-  const [allChannels, setAllChannels] = useState<ChannelOption[]>([]);
-  const [loadingChannels, setLoadingChannels] = useState(false);
-  const [selectedCrossPostChannel, setSelectedCrossPostChannel] = useState<string | null>(null);
-
   // メンション・チャネルサジェスト
+  const [allChannels, setAllChannels] = useState<ChannelOption[]>([]);
   const [allUsers, setAllUsers] = useState<UserOption[]>([]);
   const [suggestType, setSuggestType] = useState<'mention' | 'channel' | null>(null);
   const [suggestQuery, setSuggestQuery] = useState('');
@@ -60,7 +58,9 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
   const [suggestCursorPos, setSuggestCursorPos] = useState(0);
   const suggestRef = useRef<HTMLDivElement>(null);
 
-  const relatedChannels = task.relatedChannels || [];
+  // メンション表示名 → ID のマッピング（送信時に変換用）
+  const mentionMapRef = useRef<Map<string, string>>(new Map());
+  const channelMapRef = useRef<Map<string, string>>(new Map());
 
   // テキストエリアの高さを自動調整
   useEffect(() => {
@@ -71,34 +71,93 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     }
   }, [replyText]);
 
-  const fetchChannels = useCallback(async () => {
-    if (allChannels.length > 0) return;
-    setLoadingChannels(true);
+  // カスタム絵文字取得
+  useEffect(() => {
+    if (!task.workspaceId) return;
+    const controller = new AbortController();
+    fetch(`/api/slack/emoji?workspaceId=${task.workspaceId}`, { signal: controller.signal })
+      .then((res) => res.ok ? res.json() : {})
+      .then((data: Record<string, string>) => {
+        if (data && typeof data === 'object') setCustomEmojis(data);
+      })
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+      });
+    return () => controller.abort();
+  }, [task.workspaceId]);
+
+  // 絵文字をカーソル位置に挿入
+  const insertEmoji = useCallback((emojiName: string) => {
+    const emojiText = `:${emojiName}: `;
+    const ta = textareaRef.current;
+    if (ta) {
+      const start = ta.selectionStart ?? replyText.length;
+      const newText = replyText.slice(0, start) + emojiText + replyText.slice(start);
+      setReplyText(newText);
+      setTimeout(() => {
+        ta.focus();
+        ta.selectionStart = ta.selectionEnd = start + emojiText.length;
+      }, 0);
+    } else {
+      setReplyText((prev) => prev + emojiText);
+    }
+    setShowEmojiPicker(false);
+  }, [replyText]);
+
+  const channelsLoadedRef = useRef(false);
+  const channelsLoadingRef = useRef(false);
+  const usersLoadedRef = useRef(false);
+  const usersLoadingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const fetchChannels = useCallback(async (signal?: AbortSignal) => {
+    if (channelsLoadedRef.current || channelsLoadingRef.current) return;
+    channelsLoadingRef.current = true;
     try {
-      const res = await fetch(`/api/slack/channels?workspaceId=${task.workspaceId}`);
+      const res = await fetch(`/api/slack/channels?workspaceId=${task.workspaceId}`, { signal });
       if (res.ok) {
         const data = await res.json();
         setAllChannels(data);
+        channelsLoadedRef.current = true;
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      // ネットワークエラーは警告のみ（先読みのため致命的ではない）
+      console.warn('[Channels] Preload failed (will retry on use):', e);
     } finally {
-      setLoadingChannels(false);
+      channelsLoadingRef.current = false;
     }
-  }, [allChannels.length, task.workspaceId]);
+  }, [task.workspaceId]);
 
-  const fetchUsers = useCallback(async () => {
-    if (allUsers.length > 0) return;
+  const fetchUsers = useCallback(async (signal?: AbortSignal) => {
+    if (usersLoadedRef.current || usersLoadingRef.current) return;
+    usersLoadingRef.current = true;
     try {
-      const res = await fetch(`/api/slack/users?workspaceId=${task.workspaceId}`);
+      const res = await fetch(`/api/slack/channels/members?workspaceId=${task.workspaceId}&channelId=${task.channelId}`, { signal });
       if (res.ok) {
         const data = await res.json();
         setAllUsers(data);
+        usersLoadedRef.current = true;
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      console.warn('[Users] Preload failed (will retry on use):', e);
+    } finally {
+      usersLoadingRef.current = false;
     }
-  }, [allUsers.length, task.workspaceId]);
+  }, [task.workspaceId, task.channelId]);
+
+  // マウント時にメンバーとチャネルを先読み（@や#入力前にキャッシュ準備）
+  useEffect(() => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    fetchUsers(controller.signal);
+    fetchChannels(controller.signal);
+    return () => {
+      controller.abort();
+      abortControllerRef.current = null;
+    };
+  }, [fetchUsers, fetchChannels]);
 
   // サジェスト候補
   const suggestItems = suggestType === 'mention'
@@ -118,8 +177,6 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     setReplyText(newText);
 
     const cursorPos = e.target.selectionStart || 0;
-
-    // カーソル位置から逆方向に @ or # を探す
     const textBeforeCursor = newText.slice(0, cursorPos);
 
     // @ メンション検出
@@ -144,7 +201,6 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
       return;
     }
 
-    // サジェスト閉じ
     setSuggestType(null);
   };
 
@@ -157,14 +213,15 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     const textAfterCursor = replyText.slice(suggestCursorPos);
 
     if (suggestType === 'mention') {
-      // @query → <@U123> に置換
       const user = item as UserOption;
-      const replaced = textBeforeCursor.replace(/@[^\s@]*$/, `<@${user.id}> `);
+      const displayName = user.realName || user.name;
+      mentionMapRef.current.set(displayName, user.id);
+      const replaced = textBeforeCursor.replace(/@[^\s@]*$/, `@${displayName} `);
       setReplyText(replaced + textAfterCursor);
     } else if (suggestType === 'channel') {
-      // #query → <#C123|name> に置換
       const channel = item as ChannelOption;
-      const replaced = textBeforeCursor.replace(/#[^\s#]*$/, `<#${channel.id}|${channel.name}> `);
+      channelMapRef.current.set(channel.name, channel.id);
+      const replaced = textBeforeCursor.replace(/#[^\s#]*$/, `#${channel.name} `);
       setReplyText(replaced + textAfterCursor);
     }
 
@@ -172,21 +229,51 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     ta.focus();
   };
 
+  // 送信前にテキスト内の @表示名 → <@ID>、#チャネル名 → <#ID|name> に変換
+  const convertToSlackFormat = (text: string): string => {
+    let result = text;
+
+    // マークダウン → Slack mrkdwn 変換
+    result = result.replace(/^- (.+)$/gm, '• $1');
+    result = result.replace(/\*\*(.+?)\*\*/g, '*$1*');
+    result = result.replace(/~~(.+?)~~/g, '~$1~');
+
+    // メンション変換
+    const mentionEntries = [...mentionMapRef.current.entries()].sort((a, b) => b[0].length - a[0].length);
+    for (const [displayName, userId] of mentionEntries) {
+      result = result.replaceAll(`@${displayName}`, `<@${userId}>`);
+    }
+    // チャネル変換
+    const channelEntries = [...channelMapRef.current.entries()].sort((a, b) => b[0].length - a[0].length);
+    for (const [channelName, channelId] of channelEntries) {
+      result = result.replaceAll(`#${channelName}`, `<#${channelId}|${channelName}>`);
+    }
+    return result;
+  };
+
+  // 送信エラー状態
+  const [sendError, setSendError] = useState<string | null>(null);
+
   const handleSend = async () => {
     if ((!replyText.trim() && attachedFiles.length === 0) || sending) return;
-    setSending(true);
+    setSendError(null);
 
-    try {
-      // ファイルがある場合はアップロード
-      if (attachedFiles.length > 0) {
+    // ファイル添付がある場合は従来のフロー（プログレス表示付き）
+    if (attachedFiles.length > 0) {
+      setSending(true);
+      try {
+        if (task.status === 'completed') {
+          await reopenTask();
+        }
+        const slackText = convertToSlackFormat(replyText.trim());
         for (const file of attachedFiles) {
           const formData = new FormData();
           formData.append('file', file);
           formData.append('workspaceId', task.workspaceId);
           formData.append('channelId', task.channelId);
           formData.append('threadTs', task.threadTs);
-          if (replyText.trim() && attachedFiles.indexOf(file) === 0) {
-            formData.append('initialComment', replyText.trim());
+          if (slackText && attachedFiles.indexOf(file) === 0) {
+            formData.append('initialComment', slackText);
           }
           const uploadRes = await fetch('/api/slack/files/upload', {
             method: 'POST',
@@ -199,47 +286,113 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
         }
         setReplyText('');
         setAttachedFiles([]);
-        setSelectedCrossPostChannel(null);
         setShowPreview(false);
-        // サーバー側で更新済みだが、念のため再取得
+        mentionMapRef.current.clear();
+        channelMapRef.current.clear();
+        await refreshThread();
+      } catch (error) {
+        console.error('Failed to upload:', error);
+        setSendError('ファイル送信に失敗しました');
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    // --- テキストのみ: オプティミスティックUI ---
+    const originalText = replyText.trim();
+    const slackText = convertToSlackFormat(originalText);
+
+    // 1. 即座にUIをクリア＋仮メッセージをスレッドに表示
+    setReplyText('');
+    setShowPreview(false);
+    const savedMentionMap = new Map(mentionMapRef.current);
+    const savedChannelMap = new Map(channelMapRef.current);
+    mentionMapRef.current.clear();
+    channelMapRef.current.clear();
+
+    const optimisticTs = `optimistic-${Date.now()}`;
+    const optimisticMessage = {
+      id: optimisticTs,
+      workspaceId: task.workspaceId,
+      channelId: task.channelId,
+      channelName: task.channelName,
+      threadTs: task.threadTs,
+      ts: optimisticTs,
+      userId: 'me',
+      userName: '送信中...',
+      text: originalText,
+      isDirectMention: false,
+      isThreadParticipant: true,
+    };
+
+    // スレッドに仮メッセージを追加
+    const prevMessages = task.threadMessages || [];
+    updateTaskStore(task.id, {
+      threadMessages: [...prevMessages, optimisticMessage],
+    });
+
+    // 2. 完了タスクなら再オープン
+    if (task.status === 'completed') {
+      reopenTask();
+    }
+
+    // 3. バックグラウンドで送信
+    try {
+      const res = await fetch('/api/slack/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: task.workspaceId,
+          channelId: task.channelId,
+          text: slackText,
+          threadTs: task.threadTs,
+        }),
+      });
+
+      if (res.ok) {
+        // 4. 成功 → 実データでスレッドをリフレッシュ
         await refreshThread();
       } else {
-        // テキストのみの場合
-        const res = await fetch('/api/slack/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workspaceId: task.workspaceId,
-            channelId: task.channelId,
-            text: replyText.trim(),
-            threadTs: task.threadTs,
-          }),
-        });
-
-        // 関連チャネルにも投稿
-        if (selectedCrossPostChannel) {
-          await fetch('/api/slack/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              workspaceId: task.workspaceId,
-              channelId: selectedCrossPostChannel,
-              text: replyText.trim(),
-            }),
-          });
-        }
-
-        if (res.ok) {
-          setReplyText('');
-          setSelectedCrossPostChannel(null);
-          setShowPreview(false);
-          await refreshThread();
-        }
+        // 送信失敗 → 仮メッセージを除去、テキストを復元
+        updateTaskStore(task.id, { threadMessages: prevMessages });
+        setReplyText(originalText);
+        mentionMapRef.current = savedMentionMap;
+        channelMapRef.current = savedChannelMap;
+        setSendError('送信に失敗しました');
       }
     } catch (error) {
       console.error('Failed to send:', error);
-    } finally {
-      setSending(false);
+      // ネットワークエラー → 復元
+      updateTaskStore(task.id, { threadMessages: prevMessages });
+      setReplyText(originalText);
+      mentionMapRef.current = savedMentionMap;
+      channelMapRef.current = savedChannelMap;
+      setSendError('送信に失敗しました');
+    }
+  };
+
+  // タスク再オープンヘルパー
+  const reopenTask = async () => {
+    try {
+      await fetch('/api/tasks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: task.id,
+          status: 'open',
+          completedAt: null,
+          isMinimized: false,
+        }),
+      });
+      updateTaskStore(task.id, {
+        status: 'open',
+        completedAt: undefined,
+        isMinimized: false,
+      });
+      openWindowStore(task.id);
+    } catch {
+      // ignore
     }
   };
 
@@ -248,7 +401,6 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     if (files) {
       setAttachedFiles((prev) => [...prev, ...Array.from(files)]);
     }
-    // input をリセット
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -258,7 +410,6 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // ドラッグ&ドロップ
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -288,56 +439,26 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
 
   const refreshThread = async () => {
     try {
-      const res = await fetch('/api/tasks');
+      // Slack APIから直接スレッドを取得（DBキャッシュを介さない）
+      // 同時にDBも更新される
+      const params = new URLSearchParams({
+        workspaceId: task.workspaceId,
+        channelId: task.channelId,
+        threadTs: task.threadTs,
+      });
+      const res = await fetch(`/api/slack/messages?${params}`, {
+        cache: 'no-store',
+      });
       if (res.ok) {
-        const tasks = await res.json();
-        const updated = tasks.find((t: Task) => t.id === task.id);
-        if (updated) {
-          updateTaskStore(task.id, { threadMessages: updated.threadMessages });
+        const data = await res.json();
+        if (data.messages) {
+          updateTaskStore(task.id, { threadMessages: data.messages });
         }
       }
     } catch {
       // ignore
     }
   };
-
-  const addRelatedChannel = async (channelId: string) => {
-    if (relatedChannels.includes(channelId)) return;
-    const updated = [...relatedChannels, channelId];
-    updateTaskStore(task.id, { relatedChannels: updated });
-    await fetch('/api/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, relatedChannels: updated }),
-    });
-    setShowChannelSearch(false);
-    setChannelSearchQuery('');
-  };
-
-  const removeRelatedChannel = async (channelId: string) => {
-    const updated = relatedChannels.filter((id) => id !== channelId);
-    updateTaskStore(task.id, { relatedChannels: updated });
-    await fetch('/api/tasks', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, relatedChannels: updated }),
-    });
-    if (selectedCrossPostChannel === channelId) {
-      setSelectedCrossPostChannel(null);
-    }
-  };
-
-  const getChannelName = (id: string) => {
-    const ch = allChannels.find((c) => c.id === id);
-    return ch ? ch.name : id;
-  };
-
-  const filteredChannels = allChannels.filter(
-    (ch) =>
-      ch.name.toLowerCase().includes(channelSearchQuery.toLowerCase()) &&
-      !relatedChannels.includes(ch.id) &&
-      ch.id !== task.channelId,
-  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // サジェスト表示中のキー操作
@@ -372,7 +493,6 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
     }
   };
 
-  // プレビュー用のHTML生成
   const previewHtml = showPreview ? parseMrkdwn(replyText) : '';
 
   return (
@@ -495,23 +615,16 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
         className="hidden"
       />
 
-      {/* 関連チャネルタグ表示 */}
-      {relatedChannels.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-1">
-          {relatedChannels.map((chId) => (
-            <span
-              key={chId}
-              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400"
-            >
-              #{getChannelName(chId)}
-              <button
-                onClick={() => removeRelatedChannel(chId)}
-                className="text-gray-600 hover:text-[#E74C3C] transition"
-              >
-                &#10005;
-              </button>
-            </span>
-          ))}
+      {/* 送信エラー表示 */}
+      {sendError && (
+        <div className="flex items-center gap-1.5 px-2 py-1 mb-1 rounded bg-[#E74C3C]/10 border border-[#E74C3C]/20">
+          <span className="text-[10px] text-[#E74C3C]">{sendError}</span>
+          <button
+            onClick={() => setSendError(null)}
+            className="text-[#E74C3C]/60 hover:text-[#E74C3C] transition text-[10px] ml-auto"
+          >
+            &#10005;
+          </button>
         </div>
       )}
 
@@ -526,6 +639,29 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
           </svg>
         </button>
+
+        {/* 絵文字ボタン */}
+        <div className="relative">
+          <button
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            className={`px-1.5 py-1 text-[10px] rounded transition ${
+              showEmojiPicker
+                ? 'bg-[#4A9EFF]/20 text-[#4A9EFF]'
+                : 'bg-white/5 text-gray-500 hover:bg-white/10 hover:text-gray-400'
+            }`}
+            title="絵文字を挿入"
+          >
+            <span className="text-sm">{'\u{1F642}'}</span>
+          </button>
+          {showEmojiPicker && (
+            <EmojiPicker
+              onSelect={insertEmoji}
+              onClose={() => setShowEmojiPicker(false)}
+              workspaceId={task.workspaceId}
+              customEmojis={customEmojis}
+            />
+          )}
+        </div>
 
         {/* プレビュー切り替え */}
         <button
@@ -550,115 +686,27 @@ const MessageComposer = forwardRef<MessageComposerHandle, MessageComposerProps>(
           AI補助
         </button>
 
-        {/* 関連チャネル投稿ドロップダウン */}
-        <div className="relative">
-          <button
-            onClick={() => {
-              setShowChannelDropdown(!showChannelDropdown);
-              fetchChannels();
-            }}
-            className={`px-2 py-1 text-[10px] rounded transition ${
-              selectedCrossPostChannel
-                ? 'bg-orange-500/20 text-orange-400'
-                : 'bg-white/5 text-gray-500 hover:bg-white/10 hover:text-gray-400'
-            }`}
-          >
-            {selectedCrossPostChannel
-              ? `#${getChannelName(selectedCrossPostChannel)}にも投稿`
-              : '関連Ch投稿'}
-          </button>
-
-          {showChannelDropdown && (
-            <div className="absolute bottom-full left-0 mb-1 w-56 bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl z-50 overflow-hidden">
-              {/* チャネル追加 */}
-              <div className="p-2 border-b border-white/5">
-                <button
-                  onClick={() => {
-                    setShowChannelSearch(!showChannelSearch);
-                    fetchChannels();
-                  }}
-                  className="w-full text-left text-[10px] text-[#4A9EFF] hover:text-[#4A9EFF]/80 transition"
-                >
-                  + チャネルを追加
-                </button>
-              </div>
-
-              {showChannelSearch && (
-                <div className="p-2 border-b border-white/5">
-                  <input
-                    type="text"
-                    value={channelSearchQuery}
-                    onChange={(e) => setChannelSearchQuery(e.target.value)}
-                    placeholder="チャネル名で検索..."
-                    className="w-full bg-[#0F1117] border border-white/10 rounded px-2 py-1 text-[10px] text-white placeholder-gray-600 focus:outline-none focus:border-[#4A9EFF]"
-                    autoFocus
-                  />
-                  <div className="max-h-32 overflow-y-auto mt-1">
-                    {loadingChannels && (
-                      <div className="text-[10px] text-gray-600 py-1">読み込み中...</div>
-                    )}
-                    {filteredChannels.slice(0, 10).map((ch) => (
-                      <button
-                        key={ch.id}
-                        onClick={() => addRelatedChannel(ch.id)}
-                        className="w-full text-left px-2 py-1 text-[10px] text-gray-400 hover:bg-white/5 rounded transition"
-                      >
-                        #{ch.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 投稿先なし */}
-              <button
-                onClick={() => {
-                  setSelectedCrossPostChannel(null);
-                  setShowChannelDropdown(false);
-                }}
-                className={`w-full text-left px-3 py-1.5 text-[10px] transition ${
-                  !selectedCrossPostChannel
-                    ? 'text-white bg-white/5'
-                    : 'text-gray-500 hover:bg-white/5'
-                }`}
-              >
-                スレッド返信のみ
-              </button>
-
-              {/* 関連チャネル一覧 */}
-              {relatedChannels.map((chId) => (
-                <button
-                  key={chId}
-                  onClick={() => {
-                    setSelectedCrossPostChannel(chId);
-                    setShowChannelDropdown(false);
-                  }}
-                  className={`w-full text-left px-3 py-1.5 text-[10px] transition ${
-                    selectedCrossPostChannel === chId
-                      ? 'text-orange-400 bg-orange-500/10'
-                      : 'text-gray-400 hover:bg-white/5'
-                  }`}
-                >
-                  #{getChannelName(chId)} にも投稿
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         <button
           onClick={handleSend}
           disabled={(!replyText.trim() && attachedFiles.length === 0) || sending}
           className="px-2 py-1 text-[10px] rounded bg-[#4A9EFF]/20 text-[#4A9EFF] hover:bg-[#4A9EFF]/30 transition disabled:opacity-30 disabled:cursor-not-allowed"
         >
-          {sending ? '送信中...' : attachedFiles.length > 0 ? `送信 (${attachedFiles.length}ファイル)` : '返信'}
+          {sending
+            ? '送信中...'
+            : task.status === 'completed'
+              ? '返信 (再オープン)'
+              : attachedFiles.length > 0
+                ? `送信 (${attachedFiles.length}ファイル)`
+                : '返信'}
         </button>
-        <button
-          onClick={handleComplete}
-          className="px-2 py-1 text-[10px] rounded bg-[#2ECC71]/20 text-[#2ECC71] hover:bg-[#2ECC71]/30 transition ml-auto"
-        >
-          &#10003; 完了
-        </button>
+        {task.status === 'open' && (
+          <button
+            onClick={handleComplete}
+            className="px-2 py-1 text-[10px] rounded bg-[#2ECC71]/20 text-[#2ECC71] hover:bg-[#2ECC71]/30 transition ml-auto"
+          >
+            &#10003; 完了
+          </button>
+        )}
       </div>
     </div>
   );

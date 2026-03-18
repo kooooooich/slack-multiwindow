@@ -20,6 +20,7 @@ export function middleware(request: NextRequest) {
     '/api/auth',         // next-auth ルート + パスワード認証 + ステータス
     '/api/health',
     '/api/slack/events', // Slackイベント受信は認証不要
+    '/api/slack/debug',  // デバッグ用（スコープ確認）
   ];
 
   if (publicPaths.some((p) => pathname.startsWith(p))) {

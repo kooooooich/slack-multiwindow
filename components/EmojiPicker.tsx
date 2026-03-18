@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { STANDARD_EMOJI } from '@/lib/mrkdwn';
 
 // よく使うSlack絵文字のプリセット
@@ -44,7 +45,57 @@ const EmojiPicker = React.memo(function EmojiPicker({
     externalCustomEmojis || {},
   );
   const [loadingCustom, setLoadingCustom] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // ピッカー位置を計算
+  const updatePosition = useCallback(() => {
+    if (!anchorRef.current) return;
+    const rect = anchorRef.current.getBoundingClientRect();
+    const pickerWidth = 256; // w-64
+    // 実測値を使用（初回はフォールバック推定）
+    const pickerHeight = pickerRef.current?.offsetHeight || 220;
+
+    // デフォルト: アンカーの下に表示（ボタンの下に開くのが自然）
+    let top = rect.bottom + 4;
+    let left = rect.right - pickerWidth;
+
+    // 下に収まらない場合はアンカーの上に表示
+    if (top + pickerHeight > window.innerHeight - 8) {
+      top = rect.top - pickerHeight - 4;
+    }
+    // 上にも収まらない場合はビューポート内にクランプ
+    if (top < 8) {
+      top = 8;
+    }
+
+    // 左端がはみ出る場合
+    if (left < 8) {
+      left = 8;
+    }
+    // 右端がはみ出る場合
+    if (left + pickerWidth > window.innerWidth - 8) {
+      left = window.innerWidth - pickerWidth - 8;
+    }
+
+    setPos({ top, left });
+  }, []);
+
+  // 初回計算 + タブ切替で再計算
+  useEffect(() => {
+    updatePosition();
+  }, [tab, updatePosition]);
+
+  // コンテンツサイズ変化で再計算（ResizeObserver）
+  useEffect(() => {
+    if (!pickerRef.current) return;
+    const observer = new ResizeObserver(() => {
+      updatePosition();
+    });
+    observer.observe(pickerRef.current);
+    return () => observer.disconnect();
+  }, [updatePosition]);
 
   // 外部クリックで閉じる
   useEffect(() => {
@@ -91,10 +142,14 @@ const EmojiPicker = React.memo(function EmojiPicker({
       )
     : Object.entries(customEmojis);
 
-  return (
+  const pickerContent = (
     <div
       ref={pickerRef}
-      className="absolute top-0 right-8 z-50 bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl p-2 w-64"
+      className="fixed z-[9999] bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl p-2 w-64"
+      style={{
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+      }}
     >
       {/* 検索 */}
       <input
@@ -187,6 +242,15 @@ const EmojiPicker = React.memo(function EmojiPicker({
         )}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      {/* アンカー（位置計測用、ゼロサイズ） */}
+      <div ref={anchorRef} className="absolute top-0 right-0 w-0 h-0" />
+      {/* ポータルでbodyに描画（overflow問題回避） */}
+      {typeof document !== 'undefined' && createPortal(pickerContent, document.body)}
+    </>
   );
 });
 

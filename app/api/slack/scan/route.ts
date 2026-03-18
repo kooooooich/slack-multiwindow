@@ -5,14 +5,19 @@ import {
   getWorkspacesByUserId,
   getAllTasks,
   getTasksByUserId,
+  getTaskByThread,
   createTask,
+  updateTask as updateTaskInDb,
   updateWorkspaceScanTime,
 } from '@/lib/db';
-import { scanUnreadMentions } from '@/lib/unread-scan';
+import { scanUnreadMentions, scanDMs } from '@/lib/unread-scan';
 import { fetchThreadMessages } from '@/lib/slack';
+import { notifyListeners } from '@/lib/bolt-server';
 import { auth, getAuthMode } from '@/lib/auth';
 import { v4 as uuidv4 } from 'uuid';
 import type { Task } from '@/types';
+
+export const runtime = 'nodejs';
 
 /**
  * 未読メンションスキャン API
@@ -61,7 +66,8 @@ export async function POST(req: NextRequest) {
     const results = {
       totalFound: 0,
       totalCreated: 0,
-      byWorkspace: [] as { workspaceId: string; name: string; found: number; created: number }[],
+      totalRefreshed: 0,
+      byWorkspace: [] as { workspaceId: string; name: string; found: number; created: number; refreshed: number }[],
     };
 
     const now = new Date().toISOString();
@@ -69,18 +75,63 @@ export async function POST(req: NextRequest) {
     for (const ws of workspaces) {
       if (!ws.targetUserId || !ws.isActive) continue;
 
+      // 1. チャンネルのメンションスキャン
       const scanResult = await scanUnreadMentions(ws, existingThreadTs);
+
+      // 2. DM スキャン
+      const dmResult = await scanDMs(ws, existingThreadTs);
+
+      // 3. 既存タスクのスレッド更新チェック（DM・チャネル問わず）
+      //    オフライン中のメッセージ追加・編集・リアクション変更等をキャッチ
+      const wsTasks = existingTasks.filter((t) => t.workspaceId === ws.id && t.status === 'open');
+      let refreshed = 0;
+      for (const task of wsTasks) {
+        try {
+          const latestMessages = await fetchThreadMessages(
+            ws.botToken,
+            task.channelId,
+            task.threadTs,
+            ws.id,
+          );
+          // メッセージ数の変化だけでなく、最終メッセージのtsも比較
+          // 編集・リアクション変更等も検出するために常に最新データで更新
+          const oldLen = task.threadMessages?.length ?? 0;
+          const newLen = latestMessages.length;
+          const oldLastTs = task.threadMessages?.[task.threadMessages.length - 1]?.ts || '';
+          const newLastTs = latestMessages[latestMessages.length - 1]?.ts || '';
+          if (newLen !== oldLen || oldLastTs !== newLastTs || newLen > 0) {
+            updateTaskInDb(task.id, { threadMessages: latestMessages });
+            notifyListeners('task_updated', { taskId: task.id, threadRefreshed: true });
+            refreshed++;
+            console.log(`[Scan] Refreshed existing task thread: ${task.id} (${oldLen} → ${newLen} messages)`);
+          }
+        } catch {
+          // スレッド取得失敗は無視
+        }
+      }
+
+      // 両方の結果を統合
+      const allMessages = [...scanResult.messages, ...dmResult.messages];
 
       let created = 0;
 
-      for (const msg of scanResult.messages) {
+      for (const msg of allMessages) {
+        const threadTs = msg.threadTs || msg.ts;
+
+        // Bolt等で既にタスクが作成されている場合はスキップ（レースコンディション防止）
+        const existingTask = getTaskByThread(ws.id, msg.channelId, threadTs);
+        if (existingTask) {
+          console.log(`[Scan] Task already exists for thread ${threadTs} in ${msg.channelId}, skipping`);
+          continue;
+        }
+
         // スレッドメッセージを取得
         let threadMessages;
         try {
           threadMessages = await fetchThreadMessages(
             ws.botToken,
             msg.channelId,
-            msg.threadTs || msg.ts,
+            threadTs,
             ws.id,
           );
         } catch {
@@ -93,7 +144,7 @@ export async function POST(req: NextRequest) {
           workspaceId: ws.id,
           channelId: msg.channelId,
           channelName: msg.channelName,
-          threadTs: msg.threadTs || msg.ts,
+          threadTs,
           triggerMessage: msg,
           threadMessages,
           status: 'open',
@@ -104,6 +155,7 @@ export async function POST(req: NextRequest) {
           },
           windowSize: { width: 420, height: 500 },
           isMinimized: true, // スキャンで作成したタスクは最小化状態
+          lastActivityAt: now,
           relatedChannels: [],
         };
 
@@ -114,13 +166,16 @@ export async function POST(req: NextRequest) {
       // スキャン時刻を更新
       updateWorkspaceScanTime(ws.id, now);
 
-      results.totalFound += scanResult.foundMentions;
+      const totalFound = scanResult.foundMentions + dmResult.foundMentions;
+      results.totalFound += totalFound;
       results.totalCreated += created;
+      results.totalRefreshed += refreshed;
       results.byWorkspace.push({
         workspaceId: ws.id,
         name: ws.name,
-        found: scanResult.foundMentions,
+        found: totalFound,
         created,
+        refreshed,
       });
     }
 

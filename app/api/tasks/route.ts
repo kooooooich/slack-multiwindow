@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllTasks, getTasksByUserId, updateTask, deleteTask } from '@/lib/db';
 import { auth, getAuthMode } from '@/lib/auth';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     let tasks;
@@ -12,7 +14,11 @@ export async function GET() {
     } else {
       tasks = getAllTasks();
     }
-    return NextResponse.json(tasks);
+    return NextResponse.json(tasks, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      },
+    });
   } catch (error) {
     console.error('Failed to get tasks:', error);
     return NextResponse.json({ error: 'Failed to get tasks' }, { status: 500 });

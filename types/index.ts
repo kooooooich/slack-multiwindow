@@ -64,6 +64,7 @@ export interface SlackMessage {
   isThreadParticipant: boolean;
   reactions?: SlackReaction[];  // reactions on this message
   files?: SlackFile[];          // file attachments
+  replyCount?: number;          // thread reply count
 }
 
 export interface Task {
@@ -80,7 +81,101 @@ export interface Task {
   windowPosition: { x: number; y: number };
   windowSize: { width: number; height: number };
   isMinimized: boolean;
+  lastActivityAt: string;
+  /** @deprecated チャネル一覧機能に集約。常に空配列 */
   relatedChannels: string[];
+}
+
+// --- 監視チャネル ---
+
+export interface MonitoredChannel {
+  id: string;
+  workspaceId: string;
+  channelId: string;
+  channelName: string;
+  channelType: 'channel' | 'dm' | 'group_dm';
+  addedAt: string;
+}
+
+export interface MonitoredChannelRow {
+  id: string;
+  workspace_id: string;
+  channel_id: string;
+  channel_name: string;
+  channel_type: string;
+  added_at: string;
+}
+
+// --- プロジェクト & メモ ---
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  readme: string;
+  workspaceId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  description: string;
+  readme: string;
+  workspace_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectMemo {
+  id: string;
+  projectId: string;
+  taskId?: string;
+  messageTs?: string;
+  messageUser?: string;
+  messageText: string;
+  messageUrl?: string;
+  note: string;
+  createdAt: string;
+}
+
+export interface ProjectMemoRow {
+  id: string;
+  project_id: string;
+  task_id: string | null;
+  message_ts: string | null;
+  message_user: string | null;
+  message_text: string;
+  message_url: string | null;
+  note: string;
+  created_at: string;
+}
+
+// --- プロジェクト ドキュメント ---
+
+export interface ProjectDocument {
+  id: string;
+  projectId: string;
+  fileName: string;       // 保存ファイル名（UUID付き）
+  originalName: string;   // 元ファイル名
+  mimeType: string;
+  sizeBytes: number;
+  description: string;    // ユーザーが付ける概要
+  extractedText?: string; // AI分析用に抽出したテキスト
+  createdAt: string;
+}
+
+export interface ProjectDocumentRow {
+  id: string;
+  project_id: string;
+  file_name: string;
+  original_name: string;
+  mime_type: string;
+  size_bytes: number;
+  description: string;
+  extracted_text: string | null;
+  created_at: string;
 }
 
 export interface AiSuggestion {
@@ -103,6 +198,7 @@ export interface TaskRow {
   window_position: string | null;
   window_size: string | null;
   is_minimized: number;
+  last_activity_at: string | null;
   related_channels: string | null;
 }
 

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWorkspace, getAllWorkspaces } from '@/lib/db';
-import { fetchChannelMessages } from '@/lib/slack';
+import { fetchChannelMessages, fetchThreadMessages } from '@/lib/slack';
 
 /**
  * チャンネルメッセージ取得 API
- * GET: workspaceId, channelId, cursor (ページネーション)
+ * GET: workspaceId, channelId, cursor (ページネーション), threadTs (スレッド取得)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -12,6 +12,8 @@ export async function GET(req: NextRequest) {
     const workspaceId = searchParams.get('workspaceId');
     const channelId = searchParams.get('channelId');
     const cursor = searchParams.get('cursor') || undefined;
+    const threadTs = searchParams.get('threadTs') || undefined;
+    const channelName = searchParams.get('channelName') || undefined;
 
     if (!channelId) {
       return NextResponse.json(
@@ -37,11 +39,25 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // スレッドメッセージ取得
+    if (threadTs) {
+      const messages = await fetchThreadMessages(
+        botToken,
+        channelId,
+        threadTs,
+        workspaceId || '',
+      );
+      return NextResponse.json({ messages });
+    }
+
+    // チャネル履歴取得（チャネル名をフロントから渡してAPI呼出し削減）
     const result = await fetchChannelMessages(
       botToken,
       channelId,
       workspaceId || '',
       cursor,
+      20,
+      channelName,
     );
 
     return NextResponse.json(result);

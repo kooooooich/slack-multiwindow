@@ -8,9 +8,8 @@ import AiAssistPanel from './AiAssistPanel';
 import SlackMessageText from './SlackMessageText';
 import EmojiPicker from './EmojiPicker';
 import FileAttachment from './FileAttachment';
-import ChannelBrowser from './ChannelBrowser';
 import { resolveEmoji } from '@/lib/mrkdwn';
-import type { Task, SlackMessage } from '@/types';
+import type { Task, SlackMessage, Project } from '@/types';
 
 // メモ化されたメッセージリストコンポーネント
 interface MessageListProps {
@@ -21,6 +20,7 @@ interface MessageListProps {
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   customEmojis?: Record<string, string>;
   workspaceId?: string;
+  onSaveToMemo?: (msg: SlackMessage) => void;
 }
 
 const MessageList = React.memo(function MessageList({
@@ -31,11 +31,14 @@ const MessageList = React.memo(function MessageList({
   messagesEndRef,
   customEmojis,
   workspaceId,
+  onSaveToMemo,
 }: MessageListProps) {
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
-      {messages.map((msg, i) => (
-        <div key={msg.id || i} className="flex gap-2 group relative">
+      {messages.map((msg, i) => {
+        const isOptimistic = msg.ts.startsWith('optimistic-');
+        return (
+        <div key={msg.id || i} className={`flex gap-2 group relative ${isOptimistic ? 'opacity-60' : ''}`}>
           {/* アバター */}
           {msg.avatarUrl ? (
             <img
@@ -44,20 +47,31 @@ const MessageList = React.memo(function MessageList({
               className="w-8 h-8 rounded shrink-0 mt-0.5"
             />
           ) : (
-            <div className="w-8 h-8 rounded bg-[#4A9EFF]/20 flex items-center justify-center text-[10px] text-[#4A9EFF] shrink-0 mt-0.5">
-              {(msg.userName || '??').slice(0, 2).toUpperCase()}
+            <div className={`w-8 h-8 rounded flex items-center justify-center text-[10px] shrink-0 mt-0.5 ${
+              isOptimistic ? 'bg-gray-500/20 text-gray-500' : 'bg-[#4A9EFF]/20 text-[#4A9EFF]'
+            }`}>
+              {isOptimistic ? (
+                <svg className="w-4 h-4 animate-spin text-gray-500" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                (msg.userName || '??').slice(0, 2).toUpperCase()
+              )}
             </div>
           )}
 
           {/* メッセージ内容 */}
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2">
-              <span className="text-xs font-semibold text-gray-300">
-                {msg.userName}
+              <span className={`text-xs font-semibold ${isOptimistic ? 'text-gray-500' : 'text-gray-300'}`}>
+                {isOptimistic ? '送信中...' : msg.userName}
               </span>
-              <span className="text-[10px] text-gray-600">
-                {formatSlackTs(msg.ts)}
-              </span>
+              {!isOptimistic && (
+                <span className="text-[10px] text-gray-600">
+                  {formatSlackTs(msg.ts)}
+                </span>
+              )}
             </div>
             <SlackMessageText text={msg.text} customEmojis={customEmojis} />
 
@@ -90,6 +104,22 @@ const MessageList = React.memo(function MessageList({
             )}
           </div>
 
+          {/* メモ保存ボタン（ホバー時表示） */}
+          {onSaveToMemo && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSaveToMemo(msg);
+              }}
+              className="absolute top-0 right-7 opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 flex items-center justify-center rounded bg-[#1A1D27] hover:bg-white/10 text-gray-500 hover:text-gray-300 text-xs border border-white/10"
+              title="プロジェクトメモに保存"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </button>
+          )}
+
           {/* リアクション追加ボタン（ホバー時表示） */}
           <button
             onClick={(e) => {
@@ -112,7 +142,8 @@ const MessageList = React.memo(function MessageList({
             />
           )}
         </div>
-      ))}
+        );
+      })}
       <div ref={messagesEndRef} />
     </div>
   );
@@ -121,141 +152,84 @@ const MessageList = React.memo(function MessageList({
 interface ChatWindowProps {
   task: Task;
   isFocused: boolean;
-  zIndex: number;
+  onHeaderDragStart?: (e: React.DragEvent) => void;
 }
 
-export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps) {
+export default function ChatWindow({ task, isFocused, onHeaderDragStart }: ChatWindowProps) {
   const closeWindow = useAppStore((s) => s.closeWindow);
-  const minimizeWindow = useAppStore((s) => s.minimizeWindow);
   const focusWindow = useAppStore((s) => s.focusWindow);
-  const updateWindowPosition = useAppStore((s) => s.updateWindowPosition);
-  const updateWindowSize = useAppStore((s) => s.updateWindowSize);
   const updateTask = useAppStore((s) => s.updateTask);
+  const markTaskAsSeen = useAppStore((s) => s.markTaskAsSeen);
+  const hasNewMessages = useAppStore((s) => s.hasNewMessages);
   const workspaces = useAppStore((s) => s.workspaces);
   const wsName = workspaces.find((w) => w.id === task.workspaceId)?.name || '';
+  const isUpdated = hasNewMessages(task.id);
+
+  // フォーカス時に既読マーク
+  useEffect(() => {
+    if (isFocused) {
+      markTaskAsSeen(task.id);
+    }
+  }, [isFocused, task.id, task.threadMessages?.length, markTaskAsSeen]);
 
   const windowRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<MessageComposerHandle>(null);
-  const [pos, setPos] = useState(task.windowPosition);
-  const [size, setSize] = useState(task.windowSize);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [emojiPickerMsgTs, setEmojiPickerMsgTs] = useState<string | null>(null);
-  // タブ管理: 'thread' | channelId
-  const [activeTab, setActiveTab] = useState<string>('thread');
-  // 関連チャンネル名のキャッシュ
-  const [channelNames, setChannelNames] = useState<Record<string, string>>({});
-  const dragOffset = useRef({ x: 0, y: 0 });
-  const posRef = useRef(pos);
-  const sizeRef = useRef(size);
-  posRef.current = pos;
-  sizeRef.current = size;
 
-  // 関連チャンネル名を取得
+  // カスタム絵文字を取得（リアクション表示用）
+  const [customEmojis, setCustomEmojis] = useState<Record<string, string>>({});
+  const [memoTargetMsg, setMemoTargetMsg] = useState<SlackMessage | null>(null);
+  const [memoProjects, setMemoProjects] = useState<Project[]>([]);
+  const [memoSaved, setMemoSaved] = useState(false);
+  const [memoSaving, setMemoSaving] = useState(false);
   useEffect(() => {
-    const relatedChannels = task.relatedChannels || [];
-    const unknownIds = relatedChannels.filter((id) => !channelNames[id]);
-    if (unknownIds.length === 0) return;
-
-    fetch(`/api/slack/channels?workspaceId=${task.workspaceId}`)
-      .then((res) => res.json())
-      .then((channels: { id: string; name: string }[]) => {
-        const nameMap: Record<string, string> = {};
-        for (const ch of channels) {
-          if (unknownIds.includes(ch.id)) {
-            nameMap[ch.id] = ch.name;
-          }
-        }
-        setChannelNames((prev) => ({ ...prev, ...nameMap }));
+    if (!task.workspaceId) return;
+    const controller = new AbortController();
+    fetch(`/api/slack/emoji?workspaceId=${task.workspaceId}`, { signal: controller.signal })
+      .then((res) => {
+        if (res.ok) return res.json();
+        return {};
       })
-      .catch(() => {});
-  }, [task.relatedChannels, task.workspaceId, channelNames]);
-
-  // タブが削除された関連チャンネルを指している場合はスレッドに戻す
-  useEffect(() => {
-    if (activeTab !== 'thread' && !(task.relatedChannels || []).includes(activeTab)) {
-      setActiveTab('thread');
-    }
-  }, [task.relatedChannels, activeTab]);
+      .then((data: Record<string, string>) => {
+        if (data && typeof data === 'object') setCustomEmojis(data);
+      })
+      .catch((e) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+      });
+    return () => controller.abort();
+  }, [task.workspaceId]);
 
   // 新しいメッセージが来たらスクロール
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [task.threadMessages.length]);
 
-  // ドラッグ開始
-  const handleDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      if ((e.target as HTMLElement).closest('button')) return;
-      e.preventDefault();
-      focusWindow(task.id);
-      setIsDragging(true);
-      dragOffset.current = {
-        x: e.clientX - pos.x,
-        y: e.clientY - pos.y,
-      };
-    },
-    [focusWindow, task.id, pos],
-  );
-
-  // リサイズ開始
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      focusWindow(task.id);
-      setIsResizing(true);
-      dragOffset.current = {
-        x: e.clientX,
-        y: e.clientY,
-      };
-    },
-    [focusWindow, task.id],
-  );
-
-  useEffect(() => {
-    if (!isDragging && !isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging) {
-        setPos({
-          x: e.clientX - dragOffset.current.x,
-          y: e.clientY - dragOffset.current.y,
-        });
-      } else if (isResizing) {
-        const dx = e.clientX - dragOffset.current.x;
-        const dy = e.clientY - dragOffset.current.y;
-        setSize((prev) => ({
-          width: Math.max(350, prev.width + dx),
-          height: Math.max(300, prev.height + dy),
-        }));
-        dragOffset.current = { x: e.clientX, y: e.clientY };
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (isDragging) {
-        setIsDragging(false);
-        updateWindowPosition(task.id, posRef.current);
-      }
-      if (isResizing) {
-        setIsResizing(false);
-        updateWindowSize(task.id, sizeRef.current);
-      }
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging, isResizing, task.id, updateWindowPosition, updateWindowSize]);
-
   // リアクション追加
   const handleReactionAdd = useCallback(async (msg: SlackMessage, emojiName: string) => {
+    setEmojiPickerMsgTs(null);
+
+    const currentMessages = task.threadMessages.length > 0 ? task.threadMessages : [task.triggerMessage];
+    const optimisticMessages = currentMessages.map((m) => {
+      if (m.ts !== msg.ts) return m;
+      const existingReactions = m.reactions || [];
+      const existingReaction = existingReactions.find((r) => r.name === emojiName);
+      if (existingReaction) {
+        return {
+          ...m,
+          reactions: existingReactions.map((r) =>
+            r.name === emojiName ? { ...r, count: r.count + 1 } : r,
+          ),
+        };
+      }
+      return {
+        ...m,
+        reactions: [...existingReactions, { name: emojiName, count: 1, users: [] }],
+      };
+    });
+    updateTask(task.id, { threadMessages: optimisticMessages });
+
     try {
       const res = await fetch('/api/slack/reactions', {
         method: 'POST',
@@ -272,11 +246,13 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
       const data = await res.json();
       if (data.updatedMessages) {
         updateTask(task.id, { threadMessages: data.updatedMessages });
+      } else if (data.error) {
+        console.error('[Reactions] API error:', data.error);
       }
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error('[Reactions] Failed to add reaction:', e);
     }
-  }, [task.workspaceId, task.channelId, task.threadTs, task.id, updateTask]);
+  }, [task.workspaceId, task.channelId, task.threadTs, task.id, task.threadMessages, task.triggerMessage, updateTask]);
 
   const messages = task.threadMessages.length > 0
     ? task.threadMessages
@@ -285,46 +261,42 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
   return (
     <div
       ref={windowRef}
-      className="absolute flex flex-col rounded-lg overflow-hidden"
+      className="h-full flex flex-col rounded-lg overflow-hidden"
       style={{
-        left: pos.x,
-        top: pos.y,
-        width: size.width,
-        height: size.height,
-        zIndex,
         border: '1px solid',
-        borderColor: isFocused ? '#4A9EFF' : 'rgba(255,255,255,0.1)',
+        borderColor: isFocused ? '#4A9EFF' : isUpdated ? '#4A9EFF' : 'rgba(255,255,255,0.1)',
         backdropFilter: 'blur(12px)',
         boxShadow: isFocused
           ? '0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(74,158,255,0.3)'
-          : '0 20px 60px rgba(0,0,0,0.5)',
+          : isUpdated
+            ? '0 20px 60px rgba(0,0,0,0.5), 0 0 8px rgba(74,158,255,0.3)'
+            : '0 20px 60px rgba(0,0,0,0.5)',
         background: '#1E2235',
       }}
       onMouseDown={() => focusWindow(task.id)}
     >
-      {/* ヘッダー */}
+      {/* ヘッダー（ドラッグハンドル） */}
       <div
-        className="h-9 bg-[#161929] flex items-center px-3 cursor-move shrink-0 select-none"
-        onMouseDown={handleDragStart}
+        draggable={!!onHeaderDragStart}
+        onDragStart={onHeaderDragStart}
+        className={`h-9 flex items-center px-3 shrink-0 select-none cursor-grab active:cursor-grabbing ${
+          isUpdated ? 'bg-[#4A9EFF]/15' : 'bg-[#161929]'
+        }`}
       >
-        <div className="flex-1 text-xs text-gray-300 truncate">
+        <div className="flex-1 text-xs text-gray-300 truncate flex items-center gap-1.5">
+          {isUpdated && (
+            <span className="w-2 h-2 rounded-full bg-[#4A9EFF] animate-pulse shrink-0" title="新しいメッセージ" />
+          )}
           {wsName && (
-            <span className="text-gray-500 mr-1.5">{wsName}</span>
+            <span className="text-gray-500 mr-0">{wsName}</span>
           )}
           <span className="text-[#4A9EFF]">#</span>
-          {task.channelName}
+          <span className="truncate">{task.channelName}</span>
           {task.status === 'completed' && (
             <span className="ml-2 text-[10px] text-[#2ECC71] bg-[#2ECC71]/10 px-1.5 py-0.5 rounded">&#10003; 完了</span>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => minimizeWindow(task.id)}
-            className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 text-gray-500 hover:text-gray-300 transition text-xs"
-            title="最小化"
-          >
-            &#8211;
-          </button>
           <button
             onClick={() => closeWindow(task.id)}
             className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#E74C3C]/30 text-gray-500 hover:text-[#E74C3C] transition text-xs"
@@ -335,86 +307,104 @@ export default function ChatWindow({ task, isFocused, zIndex }: ChatWindowProps)
         </div>
       </div>
 
-      {/* 関連チャンネルタブバー */}
-      {(task.relatedChannels || []).length > 0 && (
-        <div className="flex items-center bg-[#161929] border-b border-white/5 px-2 shrink-0 overflow-x-auto">
-          <button
-            onClick={() => setActiveTab('thread')}
-            className={`px-2.5 py-1.5 text-[10px] whitespace-nowrap transition border-b-2 ${
-              activeTab === 'thread'
-                ? 'text-[#4A9EFF] border-[#4A9EFF]'
-                : 'text-gray-500 border-transparent hover:text-gray-400 hover:border-white/10'
-            }`}
-          >
-            スレッド
-          </button>
-          {(task.relatedChannels || []).map((chId) => (
+      {/* メッセージ表示エリア */}
+      <MessageList
+        messages={messages}
+        emojiPickerMsgTs={emojiPickerMsgTs}
+        setEmojiPickerMsgTs={setEmojiPickerMsgTs}
+        handleReactionAdd={handleReactionAdd}
+        messagesEndRef={messagesEndRef}
+        workspaceId={task.workspaceId}
+        customEmojis={customEmojis}
+        onSaveToMemo={(msg) => {
+          setMemoTargetMsg(msg);
+          setMemoSaved(false);
+          if (memoProjects.length === 0) {
+            fetch('/api/projects').then(r => r.json()).then(data => {
+              if (Array.isArray(data)) setMemoProjects(data);
+            }).catch(() => {});
+          }
+        }}
+      />
+
+      {/* プロジェクトメモ保存ポップオーバー */}
+      {memoTargetMsg && (
+        <div className="border-t border-white/5 px-3 py-2 bg-[#161929] shrink-0">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] text-gray-400">プロジェクトメモに保存</span>
             <button
-              key={chId}
-              onClick={() => setActiveTab(chId)}
-              className={`px-2.5 py-1.5 text-[10px] whitespace-nowrap transition border-b-2 ${
-                activeTab === chId
-                  ? 'text-orange-400 border-orange-400'
-                  : 'text-gray-500 border-transparent hover:text-gray-400 hover:border-white/10'
-              }`}
+              onClick={() => setMemoTargetMsg(null)}
+              className="text-gray-600 hover:text-gray-400 transition text-[10px]"
             >
-              #{channelNames[chId] || chId.slice(0, 6)}
+              &#10005;
             </button>
-          ))}
+          </div>
+          <p className="text-[9px] text-gray-500 mb-1.5 truncate">
+            {memoTargetMsg.userName}: {memoTargetMsg.text.slice(0, 60)}
+          </p>
+          {memoSaved ? (
+            <div className="text-[10px] text-[#2ECC71]">&#10003; 保存しました</div>
+          ) : memoSaving ? (
+            <div className="text-[10px] text-gray-400 animate-pulse">保存中...</div>
+          ) : memoProjects.length === 0 ? (
+            <div className="text-[10px] text-gray-600">プロジェクトがありません。/memo で作成してください。</div>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {memoProjects.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={async () => {
+                    setMemoSaving(true);
+                    try {
+                      const res = await fetch('/api/projects/memos', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          projectId: p.id,
+                          taskId: task.id,
+                          messageTs: memoTargetMsg.ts,
+                          messageUser: memoTargetMsg.userName,
+                          messageText: memoTargetMsg.text,
+                          channelId: task.channelId,
+                          workspaceId: task.workspaceId,
+                        }),
+                      });
+                      if (res.ok) {
+                        setMemoSaved(true);
+                        setTimeout(() => setMemoTargetMsg(null), 1500);
+                      }
+                    } catch { /* ignore */ } finally {
+                      setMemoSaving(false);
+                    }
+                  }}
+                  className="px-2 py-1 text-[9px] rounded bg-[#4A9EFF]/10 text-[#4A9EFF] hover:bg-[#4A9EFF]/20 transition truncate max-w-[120px]"
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* コンテンツエリア */}
-      {activeTab === 'thread' ? (
-        <>
-          {/* メッセージ表示エリア */}
-          <MessageList
-            messages={messages}
-            emojiPickerMsgTs={emojiPickerMsgTs}
-            setEmojiPickerMsgTs={setEmojiPickerMsgTs}
-            handleReactionAdd={handleReactionAdd}
-            messagesEndRef={messagesEndRef}
-            workspaceId={task.workspaceId}
-          />
+      {/* 返信エリア（完了タスクでも表示し、投稿時に自動再オープン） */}
+      <MessageComposer
+        ref={composerRef}
+        task={task}
+        onAiAssist={() => setShowAiPanel(!showAiPanel)}
+      />
 
-          {/* 返信エリア */}
-          {task.status === 'open' && (
-            <MessageComposer
-              ref={composerRef}
-              task={task}
-              onAiAssist={() => setShowAiPanel(!showAiPanel)}
-            />
-          )}
-
-          {/* AI補助パネル */}
-          {showAiPanel && task.status === 'open' && (
-            <AiAssistPanel
-              task={task}
-              onUseSuggestion={(text) => {
-                composerRef.current?.setReplyText(text);
-                setShowAiPanel(false);
-              }}
-            />
-          )}
-        </>
-      ) : (
-        /* 関連チャンネルブラウザ */
-        <ChannelBrowser
-          workspaceId={task.workspaceId}
-          channelId={activeTab}
-          channelName={channelNames[activeTab] || activeTab.slice(0, 6)}
+      {/* AI補助パネル */}
+      {showAiPanel && (
+        <AiAssistPanel
+          task={task}
+          onUseSuggestion={(text) => {
+            composerRef.current?.setReplyText(text);
+            setShowAiPanel(false);
+          }}
         />
       )}
 
-      {/* リサイズハンドル */}
-      <div
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize"
-        onMouseDown={handleResizeStart}
-        style={{
-          background:
-            'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.15) 50%)',
-        }}
-      />
     </div>
   );
 }
@@ -436,4 +426,3 @@ function formatSlackTs(ts: string): string {
     return '';
   }
 }
-

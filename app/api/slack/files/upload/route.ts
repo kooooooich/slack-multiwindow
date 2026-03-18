@@ -45,9 +45,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No bot token available' }, { status: 400 });
     }
 
-    // userToken があればユーザー自身としてアップロード
-    const client = getSlackClient(userToken || botToken);
-
     // File を Buffer に変換
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
@@ -64,8 +61,30 @@ export async function POST(req: NextRequest) {
     if (initialComment) {
       uploadArgs.initial_comment = initialComment;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const uploadResult = await client.filesUploadV2(uploadArgs as any);
+
+    // userToken があればユーザー自身としてアップロード、失敗時は botToken にフォールバック
+    let uploadResult;
+    if (userToken) {
+      try {
+        const userClient = getSlackClient(userToken);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        uploadResult = await userClient.filesUploadV2(uploadArgs as any);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : '';
+        if (msg.includes('missing_scope') || msg.includes('not_allowed_token_type')) {
+          console.log('[FileUpload] userToken lacks files:write scope, falling back to botToken');
+          const botClient = getSlackClient(botToken);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          uploadResult = await botClient.filesUploadV2(uploadArgs as any);
+        } else {
+          throw e;
+        }
+      }
+    } else {
+      const botClient = getSlackClient(botToken);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      uploadResult = await botClient.filesUploadV2(uploadArgs as any);
+    }
 
     // アップロード後にスレッドメッセージを更新（Slackの処理待ちのため少し遅延）
     if (threadTs && workspaceId) {
@@ -88,6 +107,12 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('Failed to upload file:', error);
     const message = error instanceof Error ? error.message : 'Failed to upload file';
+    if (message.includes('missing_scope')) {
+      return NextResponse.json(
+        { error: 'Slack App に files:write スコープが必要です。OAuth & Permissions で Bot/User Token Scopes に files:write を追加し、アプリを再インストールしてください。' },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
       { error: message },
       { status: 500 },

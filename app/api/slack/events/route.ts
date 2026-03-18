@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
-import {
-  getAllWorkspaces,
-  getTaskByThread,
-  createTask,
-  updateTask,
-} from '@/lib/db';
-import { fetchThreadMessages, resolveUserProfile, getChannelName } from '@/lib/slack';
-import type { Task, SlackMessage } from '@/types';
+import { getAllWorkspaces } from '@/lib/db';
+import { isBoltRunning } from '@/lib/bolt-server';
+import { processSlackEvent } from '@/lib/event-handler';
+import type { SlackEventPayload } from '@/lib/event-handler';
 
 // Slack Events API Webhook 受信（本番 Events API モード用）
 export async function POST(req: NextRequest) {
@@ -44,7 +39,6 @@ export async function POST(req: NextRequest) {
     // イベント処理
     if (body.type === 'event_callback') {
       const event = body.event;
-      // ワークスペースを特定
       const teamId = body.team_id;
       const workspaces = getAllWorkspaces();
       const ws = workspaces.find((w) => w.teamId === teamId) || workspaces[0];
@@ -54,8 +48,35 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true });
       }
 
-      // 非同期で処理（Slackの3秒タイムアウトを避ける）
-      processEventAsync(event, ws.id, ws.botToken).catch(console.error);
+      // Bolt（Socket Mode）が稼働中の場合はイベント処理をスキップ（重複防止）
+      if (isBoltRunning()) {
+        console.log('[Events API] Bolt is running (Socket Mode), skipping event to avoid duplicate processing');
+      } else {
+        // 非同期で処理（Slackの3秒タイムアウトを避ける）
+        const targetUserId = ws.targetUserId || process.env.SLACK_TARGET_USER_ID || '';
+
+        const payload: SlackEventPayload = {
+          type: event.type,
+          channel: event.channel,
+          channelType: event.channel_type,
+          threadTs: event.thread_ts,
+          ts: event.ts,
+          user: event.user,
+          text: event.text,
+          subtype: event.subtype,
+          // message_changed
+          message: event.message,
+          previousMessage: event.previous_message,
+          // message_deleted
+          deletedTs: event.deleted_ts,
+        };
+
+        processSlackEvent(payload, {
+          botToken: ws.botToken,
+          workspaceId: ws.id,
+          targetUserId,
+        }).catch(console.error);
+      }
     }
 
     return NextResponse.json({ ok: true });
@@ -63,116 +84,4 @@ export async function POST(req: NextRequest) {
     console.error('[Events API] Error:', error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
-}
-
-async function processEventAsync(
-  event: {
-    type: string;
-    channel: string;
-    thread_ts?: string;
-    ts: string;
-    user?: string;
-    text?: string;
-    subtype?: string;
-  },
-  workspaceId: string,
-  botToken: string,
-) {
-  if (event.type === 'app_mention') {
-    await handleMention(event, workspaceId, botToken);
-  } else if (event.type === 'message' && event.thread_ts && !event.subtype) {
-    await handleThreadReply(event, workspaceId, botToken);
-  }
-}
-
-async function handleMention(
-  event: { channel: string; thread_ts?: string; ts: string; user?: string; text?: string },
-  workspaceId: string,
-  botToken: string,
-) {
-  const threadTs = event.thread_ts || event.ts;
-  const channelId = event.channel;
-
-  const existing = getTaskByThread(workspaceId, channelId, threadTs);
-  if (existing) {
-    const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-    const updates: Partial<Task> = { threadMessages: messages };
-
-    // 完了済みタスクにメンションがあった場合は再オープン
-    if (existing.status === 'completed') {
-      updates.status = 'open';
-      updates.completedAt = undefined;
-      updates.isMinimized = false;
-      console.log(`[Events API] Reopening completed task due to mention: ${existing.id}`);
-    }
-
-    updateTask(existing.id, updates);
-    return;
-  }
-
-  const userProfile = event.user
-    ? await resolveUserProfile(botToken, event.user)
-    : { displayName: 'unknown', avatarUrl: '' };
-  const channelName = await getChannelName(botToken, channelId);
-  const threadMessages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-
-  const triggerMessage: SlackMessage = {
-    id: `${channelId}-${event.ts}`,
-    workspaceId,
-    channelId,
-    channelName,
-    threadTs,
-    ts: event.ts,
-    userId: event.user || '',
-    userName: userProfile.displayName,
-    avatarUrl: userProfile.avatarUrl,
-    text: event.text || '',
-    isDirectMention: true,
-    isThreadParticipant: false,
-  };
-
-  const task: Task = {
-    id: uuidv4(),
-    workspaceId,
-    channelId,
-    channelName,
-    threadTs,
-    triggerMessage,
-    threadMessages,
-    status: 'open',
-    createdAt: new Date().toISOString(),
-    windowPosition: { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 },
-    windowSize: { width: 450, height: 500 },
-    isMinimized: false,
-    relatedChannels: [],
-  };
-
-  createTask(task);
-  console.log(`[Events API] New task created: ${task.id}`);
-}
-
-async function handleThreadReply(
-  event: { channel: string; thread_ts?: string; ts: string; user?: string; text?: string },
-  workspaceId: string,
-  botToken: string,
-) {
-  const channelId = event.channel;
-  const threadTs = event.thread_ts || '';
-
-  const existing = getTaskByThread(workspaceId, channelId, threadTs);
-  if (!existing) return;
-
-  const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-  const updates: Partial<Task> = { threadMessages: messages };
-
-  // 完了済みタスクにスレッド返信があった場合は再オープン
-  if (existing.status === 'completed') {
-    updates.status = 'open';
-    updates.completedAt = undefined;
-    updates.isMinimized = false;
-    console.log(`[Events API] Reopening completed task due to thread reply: ${existing.id}`);
-  }
-
-  updateTask(existing.id, updates);
-  console.log(`[Events API] Thread reply updated task: ${existing.id}`);
 }

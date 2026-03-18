@@ -20,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ja">
-      <body className={`${geistMono.variable} font-mono antialiased bg-[#0F1117] text-white`}>
+      <body suppressHydrationWarning className={`${geistMono.variable} font-mono antialiased bg-[#0F1117] text-white`}>
         <Providers>{children}</Providers>
       </body>
     </html>

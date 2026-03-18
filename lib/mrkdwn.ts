@@ -236,37 +236,45 @@ export function parseMrkdwn(
     return `\x00INLINECODE_${idx}\x00`;
   });
 
+  // 1.5. Slack エンティティをデコード
+  // Slack API は &gt; &lt; &amp; をプリエンコードして送信する。
+  // 先にデコードし、その後 escapeHtml で均一に再エスケープする。
+  // （Slack のリンク/メンション <@U123> は実際の <> を使うため影響なし）
+  processed = processed.replace(/&amp;/g, '&');
+  processed = processed.replace(/&lt;/g, '<');
+  processed = processed.replace(/&gt;/g, '>');
+
   // 2. HTML エスケープ（コード以外の部分）
   processed = escapeHtml(processed);
 
   // 3. Slack リンク変換 <URL|label> or <URL>
   processed = processed.replace(
     /&lt;(https?:\/\/[^|&]+)\|([^&]+)&gt;/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-[#4A9EFF] hover:underline">$2</a>',
+    '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#4A9EFF;text-decoration:none" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">$2</a>',
   );
   processed = processed.replace(
     /&lt;(https?:\/\/[^&]+)&gt;/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer" class="text-[#4A9EFF] hover:underline">$1</a>',
+    '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:#4A9EFF;text-decoration:none" onmouseover="this.style.textDecoration=\'underline\'" onmouseout="this.style.textDecoration=\'none\'">$1</a>',
   );
 
   // 4. メンション変換 <@U123|name> or <@U123>
   processed = processed.replace(
     /&lt;@([A-Z0-9]+)\|([^&]+)&gt;/g,
-    '<span class="text-[#4A9EFF] bg-[#4A9EFF]/10 px-0.5 rounded font-medium">@$2</span>',
+    '<span style="color:#4A9EFF;background:rgba(74,158,255,0.1);padding:0 2px;border-radius:3px;font-weight:500">@$2</span>',
   );
   processed = processed.replace(
     /&lt;@([A-Z0-9]+)&gt;/g,
-    '<span class="text-[#4A9EFF] bg-[#4A9EFF]/10 px-0.5 rounded font-medium">@$1</span>',
+    '<span style="color:#4A9EFF;background:rgba(74,158,255,0.1);padding:0 2px;border-radius:3px;font-weight:500">@$1</span>',
   );
 
   // 5. チャンネルリンク <#C123|channel-name> or <#C123>
   processed = processed.replace(
     /&lt;#([A-Z0-9]+)\|([^&]+)&gt;/g,
-    '<span class="text-[#4A9EFF] bg-[#4A9EFF]/10 px-0.5 rounded">#$2</span>',
+    '<span style="color:#4A9EFF;background:rgba(74,158,255,0.1);padding:0 2px;border-radius:3px">#$2</span>',
   );
   processed = processed.replace(
     /&lt;#([A-Z0-9]+)&gt;/g,
-    '<span class="text-[#4A9EFF] bg-[#4A9EFF]/10 px-0.5 rounded">#$1</span>',
+    '<span style="color:#4A9EFF;background:rgba(74,158,255,0.1);padding:0 2px;border-radius:3px">#$1</span>',
   );
 
   // 6. 太字 *bold*（URL 内の * は避ける）
@@ -290,7 +298,7 @@ export function parseMrkdwn(
   // 9. 引用 > (行頭)
   processed = processed.replace(
     /^&gt;\s?(.*)$/gm,
-    '<blockquote class="border-l-2 border-gray-500 pl-2 text-gray-500 italic">$1</blockquote>',
+    '<blockquote style="border-left:2px solid #6b7280;padding-left:8px;color:#6b7280;font-style:italic;word-break:break-word;overflow-wrap:break-word;overflow:hidden;max-width:100%">$1</blockquote>',
   );
 
   // 9.5. リスト変換（箇条書き: - item, • item / 番号付き: 1. item）
@@ -306,7 +314,7 @@ export function parseMrkdwn(
           return `<li>${content}</li>`;
         })
         .join('');
-      return `<ul class="list-disc list-inside ml-2 space-y-0.5">${items}</ul>\n`;
+      return `<ul style="list-style-type:disc;list-style-position:inside;margin-left:8px">${items}</ul>\n`;
     },
   );
 
@@ -322,7 +330,7 @@ export function parseMrkdwn(
           return `<li>${content}</li>`;
         })
         .join('');
-      return `<ol class="list-decimal list-inside ml-2 space-y-0.5">${items}</ol>\n`;
+      return `<ol style="list-style-type:decimal;list-style-position:inside;margin-left:8px">${items}</ol>\n`;
     },
   );
 
@@ -330,7 +338,7 @@ export function parseMrkdwn(
   processed = processed.replace(/:([a-zA-Z0-9_+-]+):/g, (match, name) => {
     // カスタム絵文字チェック
     if (customEmojis && customEmojis[name]) {
-      return `<img src="${escapeHtml(customEmojis[name])}" alt=":${escapeHtml(name)}:" class="inline-block w-5 h-5 align-text-bottom" title=":${escapeHtml(name)}:">`;
+      return `<img src="${escapeHtml(customEmojis[name])}" alt=":${escapeHtml(name)}:" style="display:inline-block;width:20px;height:20px;vertical-align:text-bottom" title=":${escapeHtml(name)}:">`;
     }
     // 標準絵文字チェック
     if (STANDARD_EMOJI[name]) {
@@ -350,7 +358,7 @@ export function parseMrkdwn(
     const escapedCode = escapeHtml(codeBlocks[i].trim());
     processed = processed.replace(
       `\x00CODEBLOCK_${i}\x00`,
-      `<pre class="bg-[#0D1117] border border-white/10 rounded p-2 my-1 overflow-x-auto"><code class="text-[11px] text-gray-300">${escapedCode}</code></pre>`,
+      `<pre style="background:#0D1117;border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:8px;margin:4px 0;white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word;overflow:hidden;max-width:100%"><code style="font-size:11px;color:#d1d5db">${escapedCode}</code></pre>`,
     );
   }
 
@@ -359,7 +367,7 @@ export function parseMrkdwn(
     const escapedCode = escapeHtml(inlineCodes[i]);
     processed = processed.replace(
       `\x00INLINECODE_${i}\x00`,
-      `<code class="bg-[#0D1117] border border-white/10 rounded px-1 py-0.5 text-[11px] text-[#E06C75]">${escapedCode}</code>`,
+      `<code style="background:#0D1117;border:1px solid rgba(255,255,255,0.1);border-radius:3px;padding:1px 4px;font-size:11px;color:#E06C75">${escapedCode}</code>`,
     );
   }
 

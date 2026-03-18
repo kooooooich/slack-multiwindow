@@ -38,11 +38,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // userToken があればユーザー自身としてリアクション（Bot でなくユーザーの名前で付く）
-    const client = getSlackClient(userToken || botToken);
-
-    // リアクション追加 or 削除
-    try {
+    // リアクション追加 or 削除を実行するヘルパー
+    const executeReaction = async (token: string) => {
+      const client = getSlackClient(token);
       if (action === 'remove') {
         await client.reactions.remove({
           channel: channelId,
@@ -56,8 +54,28 @@ export async function POST(req: NextRequest) {
           name: emojiName,
         });
       }
+    };
+
+    // userToken → botToken フォールバック付きでリアクション実行
+    try {
+      if (userToken) {
+        try {
+          await executeReaction(userToken);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : '';
+          if (msg.includes('missing_scope') || msg.includes('not_allowed_token_type')) {
+            console.log('[Reactions] userToken lacks reactions:write scope, falling back to botToken');
+            await executeReaction(botToken);
+          } else if (msg.includes('already_reacted') || msg.includes('no_reaction')) {
+            console.log(`[Reactions] ${msg} - ignoring`);
+          } else {
+            throw e;
+          }
+        }
+      } else {
+        await executeReaction(botToken);
+      }
     } catch (reactionError: unknown) {
-      // already_reacted / no_reaction はエラーとして返さない
       const errMsg = reactionError instanceof Error ? reactionError.message : '';
       if (errMsg.includes('already_reacted') || errMsg.includes('no_reaction')) {
         console.log(`[Reactions] ${errMsg} - ignoring`);
@@ -85,6 +103,12 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('Failed to toggle reaction:', error);
     const message = error instanceof Error ? error.message : 'Failed to toggle reaction';
+    if (message.includes('missing_scope')) {
+      return NextResponse.json(
+        { error: 'Slack App に reactions:write スコープが必要です。OAuth & Permissions で Bot Token Scopes に reactions:write を追加し、アプリを再インストールしてください。' },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
       { error: message },
       { status: 500 },

@@ -33,12 +33,12 @@ export async function resolveUserProfile(
     const user = result.user as {
       real_name?: string;
       name?: string;
-      profile?: { image_48?: string };
+      profile?: { image_48?: string; display_name?: string; real_name?: string };
     } | undefined;
 
     const profile: UserProfile = {
       userId,
-      displayName: user?.real_name || user?.name || userId,
+      displayName: user?.profile?.display_name || user?.profile?.real_name || user?.real_name || user?.name || userId,
       avatarUrl: user?.profile?.image_48 || '',
     };
 
@@ -268,7 +268,113 @@ export async function joinAllChannels(
   return { joined, alreadyIn, failed };
 }
 
+// --- Channel Members (for mention suggestions, including shared channels) ---
+
+interface ChannelMember {
+  id: string;
+  name: string;
+  realName: string;
+  avatarUrl: string;
+}
+
+const channelMembersCache = new Map<string, { members: ChannelMember[]; cachedAt: number }>();
+const CHANNEL_MEMBERS_TTL = 10 * 60 * 1000; // 10分
+
+export async function fetchChannelMembers(
+  botToken: string,
+  channelId: string,
+): Promise<ChannelMember[]> {
+  // キャッシュチェック
+  const cached = channelMembersCache.get(channelId);
+  if (cached && Date.now() - cached.cachedAt < CHANNEL_MEMBERS_TTL) {
+    return cached.members;
+  }
+
+  const client = getSlackClient(botToken);
+
+  // 1. conversations.members でメンバーIDリストを取得
+  const memberIds: string[] = [];
+  let cursor: string | undefined;
+  try {
+    do {
+      const result = await client.conversations.members({
+        channel: channelId,
+        limit: 200,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (result.members) {
+        memberIds.push(...result.members);
+      }
+      cursor = result.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+  } catch (e) {
+    console.error('[fetchChannelMembers] conversations.members failed:', e);
+    return [];
+  }
+
+  // 2. 各メンバーのプロフィールを並列解決（resolveUserProfile で統一）
+  const filteredIds = memberIds.filter((id) => id !== 'USLACKBOT');
+
+  const BATCH_SIZE = 20; // Slack API レートリミット考慮
+  const members: ChannelMember[] = [];
+
+  for (let i = 0; i < filteredIds.length; i += BATCH_SIZE) {
+    const batch = filteredIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map(async (userId) => {
+        const profile = await resolveUserProfile(botToken, userId);
+        // resolveUserProfile はキャッシュ+API呼び出しを統一的に処理
+        return {
+          id: userId,
+          name: userId,
+          realName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
+        } as ChannelMember;
+      }),
+    );
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        members.push(r.value);
+      }
+    }
+  }
+
+  // キャッシュ保存
+  channelMembersCache.set(channelId, { members, cachedAt: Date.now() });
+  return members;
+}
+
 // --- Channel Messages (non-thread) ---
+
+// --- Channel Info Cache (TTL: 10分) ---
+const channelInfoCache = new Map<string, { name: string; cachedAt: number }>();
+const CHANNEL_INFO_TTL = 10 * 60 * 1000; // 10分
+
+async function resolveChannelName(
+  client: WebClient,
+  channelId: string,
+  knownName?: string,
+): Promise<string> {
+  // フロントから名前が渡されていればそのまま使用
+  if (knownName) return knownName;
+
+  // キャッシュチェック
+  const cached = channelInfoCache.get(channelId);
+  if (cached && Date.now() - cached.cachedAt < CHANNEL_INFO_TTL) {
+    return cached.name;
+  }
+
+  // API呼出し
+  try {
+    const chInfo = await client.conversations.info({ channel: channelId });
+    const name = (chInfo.channel as { name?: string })?.name || channelId;
+    channelInfoCache.set(channelId, { name, cachedAt: Date.now() });
+    return name;
+  } catch {
+    return channelId;
+  }
+}
 
 export async function fetchChannelMessages(
   botToken: string,
@@ -276,17 +382,11 @@ export async function fetchChannelMessages(
   workspaceId: string,
   cursor?: string,
   limit: number = 20,
+  knownChannelName?: string,
 ): Promise<{ messages: SlackMessage[]; nextCursor?: string; channelName: string }> {
   const client = getSlackClient(botToken);
 
-  // チャンネル名を取得
-  let channelName = channelId;
-  try {
-    const chInfo = await client.conversations.info({ channel: channelId });
-    channelName = (chInfo.channel as { name?: string })?.name || channelId;
-  } catch {
-    // ignore
-  }
+  const channelName = await resolveChannelName(client, channelId, knownChannelName);
 
   const result = await client.conversations.history({
     channel: channelId,
@@ -356,6 +456,7 @@ export async function fetchChannelMessages(
       text: resolveMentionsInText(msg.text || '', profiles),
       isDirectMention: false,
       isThreadParticipant: false,
+      replyCount: (msg as { reply_count?: number }).reply_count || 0,
       reactions: rawReactions?.map((r) => ({
         name: r.name,
         count: r.count,
@@ -371,16 +472,94 @@ export async function fetchChannelMessages(
 
 export async function listChannels(
   botToken: string,
-): Promise<{ id: string; name: string }[]> {
+): Promise<{ id: string; name: string; type?: 'channel' | 'dm' | 'group_dm' }[]> {
   const client = getSlackClient(botToken);
-  const result = await client.conversations.list({
-    types: 'public_channel,private_channel',
-    limit: 200,
-    exclude_archived: true,
-  });
+  const channels: { id: string; name: string; type?: 'channel' | 'dm' | 'group_dm' }[] = [];
 
-  return (result.channels || []).map((ch) => ({
-    id: (ch as { id: string }).id,
-    name: (ch as { name: string }).name,
-  }));
+  // private_channel には groups:read スコープが必要。
+  // im には im:read, mpim には mpim:read が必要。
+  // スコープ不足時は段階的にフォールバック。
+
+  const fetchWithTypes = async (channelTypes: string) => {
+    let cursor: string | undefined;
+    do {
+      const result = await client.conversations.list({
+        types: channelTypes,
+        limit: 200,
+        exclude_archived: true,
+        cursor,
+      });
+
+      for (const ch of result.channels || []) {
+        const c = ch as {
+          id?: string;
+          name?: string;
+          is_im?: boolean;
+          is_mpim?: boolean;
+          user?: string;
+        };
+        if (!c.id) continue;
+
+        if (c.is_im) {
+          // 1対1 DM: name がないので user ID を仮名にする（後で解決）
+          channels.push({
+            id: c.id,
+            name: c.user || c.id,
+            type: 'dm',
+          });
+        } else if (c.is_mpim) {
+          // グループDM: name が "mpdm-user1--user2--user3-1" 形式
+          channels.push({
+            id: c.id,
+            name: c.name || c.id,
+            type: 'group_dm',
+          });
+        } else if (c.name) {
+          channels.push({ id: c.id, name: c.name, type: 'channel' });
+        }
+      }
+
+      cursor = result.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+  };
+
+  // まず全タイプを試行し、スコープ不足時は段階的にフォールバック
+  const typeGroups = [
+    'public_channel,private_channel,im,mpim',
+    'public_channel,private_channel,im',
+    'public_channel,private_channel',
+    'public_channel,im',
+    'public_channel',
+  ];
+
+  for (const types of typeGroups) {
+    try {
+      channels.length = 0;
+      await fetchWithTypes(types);
+      break;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : '';
+      if (msg.includes('missing_scope') || msg.includes('not_allowed_token_type')) {
+        console.log(`[listChannels] Scope missing for types="${types}", trying next fallback`);
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  // DM の user ID をユーザー名に解決
+  const dmChannels = channels.filter((ch) => ch.type === 'dm');
+  if (dmChannels.length > 0) {
+    const resolvePromises = dmChannels.map(async (ch) => {
+      try {
+        const profile = await resolveUserProfile(botToken, ch.name);
+        ch.name = profile.displayName || ch.name;
+      } catch {
+        // user ID のまま
+      }
+    });
+    await Promise.all(resolvePromises);
+  }
+
+  return channels;
 }

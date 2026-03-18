@@ -27,9 +27,16 @@ export async function GET(req: NextRequest) {
     const channels = await listChannels(botToken);
     return NextResponse.json(channels);
   } catch (error) {
-    console.error('Failed to list channels:', error);
+    const message = error instanceof Error ? error.message : 'Failed to list channels';
+    console.error('Failed to list channels:', message);
+    if (message.includes('missing_scope')) {
+      return NextResponse.json(
+        { error: 'Slack App に channels:read スコープが必要です。OAuth & Permissions で Bot Token Scopes に channels:read を追加し、アプリを再インストールしてください。' },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
-      { error: 'Failed to list channels' },
+      { error: message },
       { status: 500 },
     );
   }

@@ -80,6 +80,71 @@ textarea:focus-visible {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
+/* Slack mrkdwn スタイル */
+.slack-mrkdwn {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.slack-mrkdwn pre {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  overflow: hidden !important;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 4px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 100%;
+}
+
+.slack-mrkdwn code {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 11px;
+}
+
+.slack-mrkdwn pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.slack-mrkdwn blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.2);
+  padding-left: 8px;
+  margin: 4px 0;
+  color: #9ca3af;
+  overflow-wrap: break-word !important;
+  word-break: break-word !important;
+  overflow: hidden !important;
+  max-width: 100%;
+}
+
+.slack-mrkdwn a {
+  color: #4A9EFF;
+  text-decoration: none;
+}
+
+.slack-mrkdwn a:hover {
+  text-decoration: underline;
+}
+
+.slack-mrkdwn ul,
+.slack-mrkdwn ol {
+  padding-left: 16px;
+  margin: 2px 0;
+}
+
+.slack-mrkdwn li {
+  margin: 1px 0;
+}
+
 /* ドラッグ中のカーソル */
 .dragging * {
   cursor: move !important;

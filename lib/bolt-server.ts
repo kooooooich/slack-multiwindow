@@ -1,17 +1,14 @@
 import { App, LogLevel } from '@slack/bolt';
-import { v4 as uuidv4 } from 'uuid';
-import {
-  getAllWorkspaces,
-  getTaskByThread,
-  createTask,
-  updateTask,
-} from './db';
-import { fetchThreadMessages, resolveUserProfile, getChannelName } from './slack';
-import type { Task, SlackMessage } from '@/types';
+import { getAllWorkspaces } from './db';
+import { processSlackEvent } from './event-handler';
+import type { SlackEventPayload } from './event-handler';
+import { startThreadPoller } from './thread-poller';
 
-// SSE用のイベントバス（Step 10で利用）
+// SSE用のイベントバス
 type EventListener = (event: { type: string; data: unknown }) => void;
 const listeners: Set<EventListener> = new Set();
+
+let sseSequence = 0;
 
 export function addSSEListener(listener: EventListener) {
   listeners.add(listener);
@@ -21,17 +18,38 @@ export function removeSSEListener(listener: EventListener) {
   listeners.delete(listener);
 }
 
-function notifyListeners(type: string, data: unknown) {
+export function notifyListeners(type: string, data: unknown) {
+  sseSequence++;
   for (const listener of listeners) {
-    listener({ type, data });
+    listener({ type, data, seq: sseSequence } as { type: string; data: unknown });
   }
 }
 
+export function getSSESequence(): number {
+  return sseSequence;
+}
+
 let boltApp: App | null = null;
+let lastEventReceivedAt = 0;
 
 // Bolt が実際に起動したかどうか（外部から参照可能）
 export function isBoltRunning(): boolean {
   return boltApp !== null;
+}
+
+/** Socket Mode 接続の健全性情報 */
+export function getSocketModeHealth(): {
+  running: boolean;
+  lastEventAt: number;
+  timeSinceLastEvent: number;
+} {
+  return {
+    running: boltApp !== null,
+    lastEventAt: lastEventReceivedAt,
+    timeSinceLastEvent: lastEventReceivedAt > 0
+      ? Date.now() - lastEventReceivedAt
+      : -1,
+  };
 }
 
 export async function startSlackBolt(): Promise<boolean> {
@@ -64,7 +82,6 @@ export async function startSlackBolt(): Promise<boolean> {
 
   if (!targetUserId) {
     console.log('[Bolt] No target user ID configured. Mention detection disabled.');
-    console.log('[Bolt] Set targetUserId in workspace settings or SLACK_TARGET_USER_ID env var.');
   } else {
     console.log(`[Bolt] Monitoring mentions for user: ${targetUserId}`);
   }
@@ -86,54 +103,75 @@ export async function startSlackBolt(): Promise<boolean> {
 
   boltApp = new App(appConfig);
 
-  // --- Event Handlers ---
+  // --- グローバルミドルウェア: 全イベントログ + 健全性追跡 ---
+  boltApp.use(async ({ body, next }) => {
+    const b = body as Record<string, unknown>;
+    const event = b.event as Record<string, unknown> | undefined;
+    if (event) {
+      lastEventReceivedAt = Date.now();
+      console.log(`[Bolt:ALL] Event received: type=${event.type}, subtype=${event.subtype || 'none'}, channel=${event.channel}, channel_type=${event.channel_type || 'unknown'}, user=${event.user}, ts=${event.ts}`);
+    }
+    await next();
+  });
 
-  // message イベント: ユーザーへのメンション検知 + スレッド返信追跡
+  // --- Event Handler: 統合イベントハンドラに委譲 ---
   boltApp.event('message', async ({ event, context }) => {
-    const msg = event as {
-      thread_ts?: string;
-      subtype?: string;
-      channel?: string;
-      user?: string;
-      text?: string;
-      ts?: string;
-    };
+    try {
+      const msg = event as unknown as Record<string, unknown>;
+      const payload: SlackEventPayload = {
+        type: 'message',
+        channel: (msg.channel as string) || '',
+        channelType: (msg.channel_type as string) || '',
+        threadTs: (msg.thread_ts as string) || undefined,
+        ts: (msg.ts as string) || '',
+        user: (msg.user as string) || undefined,
+        text: (msg.text as string) || undefined,
+        subtype: (msg.subtype as string) || undefined,
+        // message_changed
+        message: msg.message as SlackEventPayload['message'],
+        previousMessage: msg.previous_message as SlackEventPayload['previousMessage'],
+        // message_deleted
+        deletedTs: (msg.deleted_ts as string) || undefined,
+      };
 
-    // subtype ありは無視（bot_message, channel_join など）
-    if (msg.subtype) return;
-
-    const text = msg.text || '';
-    const channelId = msg.channel || '';
-    const ts = msg.ts || '';
-
-    // 1. ユーザーメンションの検知（新規タスク or 既存タスク更新）
-    if (targetUserId && text.includes(`<@${targetUserId}>`)) {
-      await handleUserMention(
-        { channel: channelId, thread_ts: msg.thread_ts, ts, user: msg.user, text },
-        context,
-        ws.id,
-        targetUserId,
-      );
-      return;
-    }
-
-    // 2. スレッド返信の追跡（既存タスクのスレッドに返信があった場合）
-    if (msg.thread_ts) {
-      await handleThreadReply(
-        { channel: channelId, thread_ts: msg.thread_ts, ts, user: msg.user, text },
-        context,
-        ws.id,
-        targetUserId || undefined,
-      );
+      await processSlackEvent(payload, {
+        botToken: context.botToken || botToken,
+        workspaceId: ws.id,
+        targetUserId: targetUserId || '',
+      });
+    } catch (error) {
+      console.error('[Bolt] Error handling message event:', error);
     }
   });
 
-  // app_mention も念のため残す（ボットへのメンション = タスク化したい場合に対応）
+  // app_mention: targetUserId 未設定時のフォールバック
   boltApp.event('app_mention', async ({ event, context }) => {
-    // targetUserId が設定されている場合、app_mention は message イベントで処理済みなのでスキップ
     if (targetUserId) return;
-    await handleUserMention(event, context, ws.id, '');
+    try {
+      const msg = event as unknown as Record<string, unknown>;
+      await processSlackEvent(
+        {
+          type: 'app_mention',
+          channel: (msg.channel as string) || '',
+          ts: (msg.ts as string) || '',
+          user: (msg.user as string) || undefined,
+          text: (msg.text as string) || undefined,
+          threadTs: (msg.thread_ts as string) || undefined,
+        },
+        {
+          botToken: context.botToken || botToken,
+          workspaceId: ws.id,
+          targetUserId: '',
+        },
+      );
+    } catch (error) {
+      console.error('[Bolt] Error handling app_mention event:', error);
+    }
   });
+
+  // Socket Mode の障害時フォールバックとしてスレッドポーラーを起動
+  // boltApp.start() より先に起動することで、Socket Mode接続失敗時もポーラーが動作する
+  startThreadPoller();
 
   if (useSocketMode) {
     await boltApp.start();
@@ -145,127 +183,4 @@ export async function startSlackBolt(): Promise<boolean> {
 
 export function getBoltApp(): App | null {
   return boltApp;
-}
-
-interface MessageEvent {
-  channel: string;
-  thread_ts?: string;
-  ts: string;
-  user?: string;
-  text?: string;
-}
-
-async function handleUserMention(
-  event: MessageEvent,
-  context: { botToken?: string },
-  workspaceId: string,
-  _targetUserId: string,
-) {
-  const botToken = context.botToken || '';
-  const threadTs = event.thread_ts || event.ts;
-  const channelId = event.channel;
-
-  console.log(`[Bolt] User mention detected in #${channelId}, thread: ${threadTs}`);
-
-  // 既存タスクチェック
-  const existing = getTaskByThread(workspaceId, channelId, threadTs);
-  if (existing) {
-    // スレッドメッセージを更新
-    const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-    const updates: Partial<Task> = { threadMessages: messages };
-
-    // 完了済みタスクにメンションがあった場合は再オープン
-    if (existing.status === 'completed') {
-      updates.status = 'open';
-      updates.completedAt = undefined;
-      updates.isMinimized = false;
-      console.log(`[Bolt] Reopening completed task due to mention: ${existing.id}`);
-    }
-
-    updateTask(existing.id, updates);
-    notifyListeners('task_updated', { taskId: existing.id, reopened: existing.status === 'completed' });
-    return;
-  }
-
-  // 新規タスク作成
-  const userProfile = event.user
-    ? await resolveUserProfile(botToken, event.user)
-    : { displayName: 'unknown', avatarUrl: '' };
-  const channelName = await getChannelName(botToken, channelId);
-  const threadMessages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-
-  const triggerMessage: SlackMessage = {
-    id: `${channelId}-${event.ts}`,
-    workspaceId,
-    channelId,
-    channelName,
-    threadTs,
-    ts: event.ts,
-    userId: event.user || '',
-    userName: userProfile.displayName,
-    avatarUrl: userProfile.avatarUrl,
-    text: event.text || '',
-    isDirectMention: true,
-    isThreadParticipant: false,
-  };
-
-  const task: Task = {
-    id: uuidv4(),
-    workspaceId,
-    channelId,
-    channelName,
-    threadTs,
-    triggerMessage,
-    threadMessages,
-    status: 'open',
-    createdAt: new Date().toISOString(),
-    windowPosition: { x: 100 + Math.random() * 200, y: 100 + Math.random() * 200 },
-    windowSize: { width: 450, height: 500 },
-    isMinimized: false,
-    relatedChannels: [],
-  };
-
-  createTask(task);
-  notifyListeners('task_created', task);
-  console.log(`[Bolt] New task created: ${task.id}`);
-}
-
-interface ThreadReplyEvent {
-  channel?: string;
-  thread_ts?: string;
-  ts?: string;
-  user?: string;
-  text?: string;
-}
-
-async function handleThreadReply(
-  event: ThreadReplyEvent,
-  context: { botToken?: string },
-  workspaceId: string,
-  targetUserId?: string,
-) {
-  const botToken = context.botToken || '';
-  const channelId = event.channel || '';
-  const threadTs = event.thread_ts || '';
-  const text = event.text || '';
-
-  // このスレッドに対するタスクが存在するか確認
-  const existing = getTaskByThread(workspaceId, channelId, threadTs);
-  if (!existing) return;
-
-  // スレッドメッセージを更新
-  const messages = await fetchThreadMessages(botToken, channelId, threadTs, workspaceId);
-  const updates: Partial<Task> = { threadMessages: messages };
-
-  // 完了済みタスクで、ターゲットユーザーへのメンションがある場合は再オープン
-  if (existing.status === 'completed' && targetUserId && text.includes(`<@${targetUserId}>`)) {
-    updates.status = 'open';
-    updates.completedAt = undefined;
-    updates.isMinimized = false;
-    console.log(`[Bolt] Reopening completed task due to thread mention: ${existing.id}`);
-  }
-
-  updateTask(existing.id, updates);
-  notifyListeners('task_updated', { taskId: existing.id, reopened: existing.status === 'completed' && updates.status === 'open' });
-  console.log(`[Bolt] Thread reply updated task: ${existing.id}`);
 }

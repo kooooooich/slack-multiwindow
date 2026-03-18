@@ -19,7 +19,8 @@ const SlackMessageText = React.memo(function SlackMessageText({
 
   return (
     <div
-      className="text-xs text-gray-400 mt-0.5 break-words slack-mrkdwn"
+      className="text-xs text-gray-400 mt-0.5 slack-mrkdwn"
+      style={{ overflowWrap: 'break-word', wordBreak: 'break-word', overflow: 'hidden', maxWidth: '100%' }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
