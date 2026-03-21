@@ -7,6 +7,7 @@ import TaskBoard from '@/components/TaskBoard';
 import WindowManager from '@/components/WindowManager';
 import ChannelView from '@/components/ChannelView';
 import SearchBar from '@/components/SearchBar';
+import ProjectFilterTabs from '@/components/ProjectFilterTabs';
 import LoginScreen from '@/components/LoginScreen';
 import { useAppStore } from '@/lib/store';
 import { useTaskSync } from '@/hooks/useTaskSync';
@@ -134,6 +135,7 @@ export default function Home() {
         session={session}
         scanning={scanning}
       />
+      <ProjectFilterTabs />
       <MainContent />
     </div>
   );
@@ -226,9 +228,9 @@ function Header({
         <SearchBar />
 
         <a
-          href="/memo"
+          href="/project"
           className="text-gray-500 hover:text-gray-300 transition p-1 rounded hover:bg-white/5"
-          title="プロジェクトメモ"
+          title="プロジェクト"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

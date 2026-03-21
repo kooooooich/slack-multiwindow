@@ -38,11 +38,19 @@ export default function TaskBoard() {
   const setActiveChannel = useAppStore((s) => s.setActiveChannel);
   const hasNewMessages = useAppStore((s) => s.hasNewMessages);
 
+  const filterProjectId = useAppStore((s) => s.filterProjectId);
+
+  const filterByProject = (t: Task) => {
+    if (filterProjectId === null) return true; // ALL
+    if (filterProjectId === 'unassigned') return !t.projectId;
+    return t.projectId === filterProjectId;
+  };
+
   const openTasks = tasks
-    .filter((t) => t.status === 'open')
+    .filter((t) => t.status === 'open' && filterByProject(t))
     .sort((a, b) => (b.lastActivityAt || b.createdAt).localeCompare(a.lastActivityAt || a.createdAt));
   const completedTasks = tasks
-    .filter((t) => t.status === 'completed')
+    .filter((t) => t.status === 'completed' && filterByProject(t))
     .sort((a, b) => (b.lastActivityAt || b.createdAt).localeCompare(a.lastActivityAt || a.createdAt));
 
   const formatTime = (ts: string) => {

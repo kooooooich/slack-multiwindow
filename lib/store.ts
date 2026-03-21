@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { Workspace, Task, MonitoredChannel, SlackMessage } from '@/types';
+import type { Workspace, Task, MonitoredChannel, SlackMessage, Project } from '@/types';
 
 // チャネルメッセージキャッシュ（TTL: 3分）
 interface ChannelMessageCache {
@@ -58,6 +58,12 @@ interface AppStore {
   getCachedMessages: (channelId: string) => ChannelMessageCache | null;
   setCachedMessages: (channelId: string, messages: SlackMessage[], nextCursor?: string) => void;
   clearChannelCache: (channelId?: string) => void;
+
+  // プロジェクトフィルタ
+  projects: Project[];
+  setProjects: (projects: Project[]) => void;
+  filterProjectId: string | null; // null = ALL, 'unassigned' = 未分類, その他 = projectId
+  setFilterProjectId: (id: string | null) => void;
 
   // スレッド更新通知（最後に確認したメッセージ数を記録）
   lastSeenMessageCount: Record<string, number>;
@@ -271,6 +277,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       return { channelMessageCache: {} };
     }),
+
+  // プロジェクトフィルタ
+  projects: [],
+  setProjects: (projects) => set({ projects }),
+  filterProjectId: null,
+  setFilterProjectId: (id) => set({ filterProjectId: id }),
 
   // スレッド更新通知
   lastSeenMessageCount: {},

@@ -29,16 +29,23 @@ export default function WindowManager() {
     return () => observer.disconnect();
   }, []);
 
-  // lastActivityAt 降順で表示するタスク一覧（最新が左上）
+  const filterProjectId = useAppStore((s) => s.filterProjectId);
+
+  // lastActivityAt 降順で表示するタスク一覧（最新が左上）、プロジェクトフィルタ適用
   const orderedTasks = useMemo(() => {
     return tasks
-      .filter((t) => openWindowIds.includes(t.id))
+      .filter((t) => {
+        if (!openWindowIds.includes(t.id)) return false;
+        if (filterProjectId === null) return true;
+        if (filterProjectId === 'unassigned') return !t.projectId;
+        return t.projectId === filterProjectId;
+      })
       .sort((a, b) => {
         const aTime = a.lastActivityAt || a.createdAt;
         const bTime = b.lastActivityAt || b.createdAt;
         return bTime.localeCompare(aTime);
       });
-  }, [tasks, openWindowIds]);
+  }, [tasks, openWindowIds, filterProjectId]);
 
   // 動的グリッド計算（最大3列 × 2行）
   const gridStyle = useMemo(() => {

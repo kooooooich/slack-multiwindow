@@ -184,6 +184,26 @@ export default function ChatWindow({ task, isFocused, onHeaderDragStart }: ChatW
   const [memoProjects, setMemoProjects] = useState<Project[]>([]);
   const [memoSaved, setMemoSaved] = useState(false);
   const [memoSaving, setMemoSaving] = useState(false);
+
+  // プロジェクト紐付け
+  const projects = useAppStore((s) => s.projects);
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+
+  const handleProjectChange = async (projectId: string | null) => {
+    setShowProjectDropdown(false);
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, projectId: projectId }),
+      });
+      if (res.ok) {
+        updateTask(task.id, { projectId: projectId || undefined });
+      }
+    } catch { /* ignore */ }
+  };
+
+  const currentProject = projects.find((p) => p.id === task.projectId);
   useEffect(() => {
     if (!task.workspaceId) return;
     const controller = new AbortController();
@@ -297,6 +317,43 @@ export default function ChatWindow({ task, isFocused, onHeaderDragStart }: ChatW
           )}
         </div>
         <div className="flex items-center gap-1">
+          {/* プロジェクト紐付けボタン */}
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowProjectDropdown(!showProjectDropdown); }}
+              className={`px-1.5 py-0.5 text-[9px] rounded transition truncate max-w-[80px] ${
+                currentProject
+                  ? 'bg-purple-500/15 text-purple-400 hover:bg-purple-500/25'
+                  : 'bg-white/5 text-gray-600 hover:bg-white/10 hover:text-gray-400'
+              }`}
+              title={currentProject ? `プロジェクト: ${currentProject.name}` : 'プロジェクトを設定'}
+            >
+              {currentProject ? currentProject.name : '未分類'}
+            </button>
+            {showProjectDropdown && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-[#1A1D27] border border-white/10 rounded-lg shadow-xl z-50 py-1 max-h-48 overflow-y-auto">
+                <button
+                  onClick={() => handleProjectChange(null)}
+                  className={`w-full text-left px-3 py-1.5 text-[10px] hover:bg-white/5 transition ${
+                    !task.projectId ? 'text-[#4A9EFF]' : 'text-gray-400'
+                  }`}
+                >
+                  未分類
+                </button>
+                {projects.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => handleProjectChange(p.id)}
+                    className={`w-full text-left px-3 py-1.5 text-[10px] hover:bg-white/5 transition truncate ${
+                      task.projectId === p.id ? 'text-[#4A9EFF]' : 'text-gray-400'
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={() => closeWindow(task.id)}
             className="w-6 h-6 flex items-center justify-center rounded hover:bg-[#E74C3C]/30 text-gray-500 hover:text-[#E74C3C] transition text-xs"
@@ -347,7 +404,7 @@ export default function ChatWindow({ task, isFocused, onHeaderDragStart }: ChatW
           ) : memoSaving ? (
             <div className="text-[10px] text-gray-400 animate-pulse">保存中...</div>
           ) : memoProjects.length === 0 ? (
-            <div className="text-[10px] text-gray-600">プロジェクトがありません。/memo で作成してください。</div>
+            <div className="text-[10px] text-gray-600">プロジェクトがありません。/project で作成してください。</div>
           ) : (
             <div className="flex flex-wrap gap-1">
               {memoProjects.map((p) => (

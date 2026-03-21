@@ -6,6 +6,7 @@ import type {
   Project, ProjectRow,
   ProjectMemo, ProjectMemoRow,
   ProjectDocument, ProjectDocumentRow,
+  ProjectChannel, ProjectChannelRow,
 } from '@/types';
 
 const DB_PATH = process.env.DATABASE_PATH || './app.db';
@@ -100,6 +101,17 @@ function initTables(db: Database.Database) {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS project_channels (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_name TEXT NOT NULL,
+      added_at TEXT NOT NULL,
+      UNIQUE(project_id, channel_id),
+      UNIQUE(channel_id),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS project_documents (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -141,6 +153,11 @@ function initTables(db: Database.Database) {
     db.exec("ALTER TABLE tasks ADD COLUMN last_activity_at TEXT");
     // 既存タスクは created_at で初期化
     db.exec("UPDATE tasks SET last_activity_at = created_at WHERE last_activity_at IS NULL");
+  }
+
+  // tasks テーブルのマイグレーション: project_id
+  if (!taskColumns.some((c) => c.name === 'project_id')) {
+    db.exec("ALTER TABLE tasks ADD COLUMN project_id TEXT");
   }
 
   // tasks テーブルの重複クリーンアップ + ユニークインデックス追加
@@ -315,10 +332,19 @@ export function getTasksForPolling(maxCompletedAgeDays: number = 7): Task[] {
 
 export function createTask(task: Task): Task {
   const now = new Date().toISOString();
+
+  // チャネルベースでプロジェクト自動紐付け
+  if (!task.projectId) {
+    const pc = getProjectChannelByChannelId(task.channelId);
+    if (pc) {
+      task.projectId = pc.projectId;
+    }
+  }
+
   // UNIQUE制約(workspace_id, channel_id, thread_ts)違反時は既存タスクを更新
   getDb().prepare(`
-    INSERT INTO tasks (id, workspace_id, channel_id, channel_name, thread_ts, trigger_message, thread_messages, status, created_at, completed_at, window_position, window_size, is_minimized, last_activity_at, related_channels)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, workspace_id, channel_id, channel_name, thread_ts, trigger_message, thread_messages, status, project_id, created_at, completed_at, window_position, window_size, is_minimized, last_activity_at, related_channels)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (workspace_id, channel_id, thread_ts) DO UPDATE SET
       thread_messages = excluded.thread_messages,
       status = CASE WHEN tasks.status = 'completed' THEN excluded.status ELSE tasks.status END,
@@ -332,6 +358,7 @@ export function createTask(task: Task): Task {
     JSON.stringify(task.triggerMessage),
     JSON.stringify(task.threadMessages),
     task.status,
+    task.projectId || null,
     task.createdAt,
     task.completedAt || null,
     JSON.stringify(task.windowPosition),
@@ -358,7 +385,7 @@ export function updateTask(id: string, updates: Partial<Task>): Task | null {
   getDb().prepare(`
     UPDATE tasks SET
       workspace_id = ?, channel_id = ?, channel_name = ?, thread_ts = ?,
-      trigger_message = ?, thread_messages = ?, status = ?,
+      trigger_message = ?, thread_messages = ?, status = ?, project_id = ?,
       created_at = ?, completed_at = ?, window_position = ?, window_size = ?,
       is_minimized = ?, last_activity_at = ?, related_channels = ?
     WHERE id = ?
@@ -370,6 +397,7 @@ export function updateTask(id: string, updates: Partial<Task>): Task | null {
     JSON.stringify(merged.triggerMessage),
     JSON.stringify(merged.threadMessages),
     merged.status,
+    merged.projectId || null,
     merged.createdAt,
     merged.completedAt || null,
     JSON.stringify(merged.windowPosition),
@@ -397,6 +425,7 @@ function rowToTask(row: TaskRow): Task {
     triggerMessage: JSON.parse(row.trigger_message) as SlackMessage,
     threadMessages: JSON.parse(row.thread_messages) as SlackMessage[],
     status: row.status as 'open' | 'completed',
+    projectId: row.project_id || undefined,
     createdAt: row.created_at,
     completedAt: row.completed_at || undefined,
     windowPosition: row.window_position ? JSON.parse(row.window_position) : { x: 100, y: 100 },
@@ -687,5 +716,80 @@ function rowToDocument(row: ProjectDocumentRow): ProjectDocument {
     description: row.description,
     extractedText: row.extracted_text || undefined,
     createdAt: row.created_at,
+  };
+}
+
+// --- Project Channels CRUD ---
+
+export function getProjectChannels(projectId: string): ProjectChannel[] {
+  const rows = getDb().prepare(
+    'SELECT * FROM project_channels WHERE project_id = ? ORDER BY added_at ASC'
+  ).all(projectId) as ProjectChannelRow[];
+  return rows.map(rowToProjectChannel);
+}
+
+export function getAllProjectChannels(): ProjectChannel[] {
+  const rows = getDb().prepare(
+    'SELECT * FROM project_channels ORDER BY added_at ASC'
+  ).all() as ProjectChannelRow[];
+  return rows.map(rowToProjectChannel);
+}
+
+export function getProjectChannelByChannelId(channelId: string): ProjectChannel | null {
+  const row = getDb().prepare(
+    'SELECT * FROM project_channels WHERE channel_id = ?'
+  ).get(channelId) as ProjectChannelRow | undefined;
+  return row ? rowToProjectChannel(row) : null;
+}
+
+export function addProjectChannel(data: {
+  projectId: string;
+  channelId: string;
+  channelName: string;
+}): ProjectChannel {
+  const { v4: uuidv4 } = require('uuid');
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  getDb().prepare(`
+    INSERT INTO project_channels (id, project_id, channel_id, channel_name, added_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, data.projectId, data.channelId, data.channelName, now);
+
+  // 既存の未分類タスク(project_id=NULL)でこのチャネルのものを自動紐付け
+  getDb().prepare(`
+    UPDATE tasks SET project_id = ? WHERE channel_id = ? AND project_id IS NULL
+  `).run(data.projectId, data.channelId);
+
+  return {
+    id,
+    projectId: data.projectId,
+    channelId: data.channelId,
+    channelName: data.channelName,
+    addedAt: now,
+  };
+}
+
+export function removeProjectChannel(projectId: string, channelId: string): boolean {
+  const result = getDb().prepare(
+    'DELETE FROM project_channels WHERE project_id = ? AND channel_id = ?'
+  ).run(projectId, channelId);
+
+  // 紐付け解除されたタスクのproject_idをNULLに戻す
+  if (result.changes > 0) {
+    getDb().prepare(`
+      UPDATE tasks SET project_id = NULL WHERE channel_id = ? AND project_id = ?
+    `).run(channelId, projectId);
+  }
+
+  return result.changes > 0;
+}
+
+function rowToProjectChannel(row: ProjectChannelRow): ProjectChannel {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    channelId: row.channel_id,
+    channelName: row.channel_name,
+    addedAt: row.added_at,
   };
 }

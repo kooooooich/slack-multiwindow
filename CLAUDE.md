@@ -50,6 +50,7 @@ unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL && pnpm dev
 | `tasks` | メンションベースのタスク（スレッド追跡） |
 | `monitored_channels` | 監視対象チャネル |
 | `projects` | プロジェクト（名前・概要README） |
+| `project_channels` | プロジェクト-チャネル紐付け（1チャネル=1プロジェクト制約） |
 | `project_memos` | プロジェクトメモ（Slackメッセージのクリップ等） |
 | `project_documents` | プロジェクト添付ドキュメント（ファイルメタ + 抽出テキスト） |
 
@@ -68,6 +69,14 @@ unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL && pnpm dev
 ### タスクウィンドウ自動展開
 - SSE経路: `useTaskSync.ts` でメッセージ数増加を検知 → `openWindow`
 - Polling経路: `store.ts` の `setTasks` でメッセージ数増加 or reopen を検知 → 自動展開
+
+### プロジェクト-タスク紐付け
+- `project_channels` テーブルでプロジェクトとSlackチャネルを紐付け（1チャネル=1プロジェクト制約）
+- タスク作成時に `channel_id` → `project_channels` 検索で `project_id` を自動設定
+- 未分類タスク（`project_id = NULL`）は手動でプロジェクトに振り分け可能
+- タスクページのプロジェクトフィルタタブ（`ProjectFilterTabs`）で絞り込み
+- ChatWindowヘッダーのドロップダウンからプロジェクト変更可能
+- プロジェクト管理ページ: `/project`（旧 `/memo`）
 
 ### プロジェクトドキュメント
 - API: `POST/GET/PATCH/DELETE /api/projects/documents`

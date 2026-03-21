@@ -1025,7 +1025,7 @@ export default function ChannelView({ workspaceId, channelId, channelName }: Cha
               ) : memoSaving ? (
                 <div className="text-[10px] text-gray-400 animate-pulse">保存中...</div>
               ) : memoProjects.length === 0 ? (
-                <div className="text-[10px] text-gray-600">プロジェクトがありません。/memo で作成してください。</div>
+                <div className="text-[10px] text-gray-600">プロジェクトがありません。/project で作成してください。</div>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {memoProjects.map((p) => (

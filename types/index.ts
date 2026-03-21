@@ -76,6 +76,7 @@ export interface Task {
   triggerMessage: SlackMessage;
   threadMessages: SlackMessage[];
   status: 'open' | 'completed';
+  projectId?: string;
   createdAt: string;
   completedAt?: string;
   windowPosition: { x: number; y: number };
@@ -193,6 +194,7 @@ export interface TaskRow {
   trigger_message: string;
   thread_messages: string;
   status: string;
+  project_id: string | null;
   created_at: string;
   completed_at: string | null;
   window_position: string | null;
@@ -200,6 +202,24 @@ export interface TaskRow {
   is_minimized: number;
   last_activity_at: string | null;
   related_channels: string | null;
+}
+
+// --- プロジェクト チャネル紐付け ---
+
+export interface ProjectChannel {
+  id: string;
+  projectId: string;
+  channelId: string;
+  channelName: string;
+  addedAt: string;
+}
+
+export interface ProjectChannelRow {
+  id: string;
+  project_id: string;
+  channel_id: string;
+  channel_name: string;
+  added_at: string;
 }
 
 export interface WorkspaceRow {

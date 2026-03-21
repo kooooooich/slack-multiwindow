@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Project, ProjectMemo, ProjectDocument, Task } from '@/types';
+import type { Project, ProjectMemo, ProjectDocument, ProjectChannel, Task } from '@/types';
 
 // Slack mrkdwn を表示名に変換
 function stripMrkdwn(text: string) {
@@ -17,7 +17,7 @@ function stripMrkdwn(text: string) {
     .replace(/<(https?:\/\/[^>]+)>/g, '$1');
 }
 
-export default function MemoPage() {
+export default function ProjectPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [memos, setMemos] = useState<ProjectMemo[]>([]);
@@ -71,6 +71,13 @@ export default function MemoPage() {
   // メモ削除確認
   const [deleteMemoConfirmId, setDeleteMemoConfirmId] = useState<string | null>(null);
 
+  // チャネル紐付け管理
+  const [projectChannels, setProjectChannels] = useState<ProjectChannel[]>([]);
+  const [showChannelPicker, setShowChannelPicker] = useState(false);
+  const [availableChannels, setAvailableChannels] = useState<{ id: string; name: string; type?: string }[]>([]);
+  const [channelSearchQuery, setChannelSearchQuery] = useState('');
+  const [allProjectChannels, setAllProjectChannels] = useState<ProjectChannel[]>([]);
+
   // 右パネル（概要）のリサイズ
   const [rightPanelWidth, setRightPanelWidth] = useState(380);
   const [isResizing, setIsResizing] = useState(false);
@@ -122,11 +129,12 @@ export default function MemoPage() {
       .catch(() => {});
   }, []);
 
-  // メモ取得 + README読み込み + ドキュメント取得
+  // メモ取得 + README読み込み + ドキュメント取得 + チャネル紐付け取得
   useEffect(() => {
     if (!selectedProjectId) {
       setMemos([]);
       setDocuments([]);
+      setProjectChannels([]);
       setReadme('');
       return;
     }
@@ -142,11 +150,27 @@ export default function MemoPage() {
         if (Array.isArray(data)) setDocuments(data);
       })
       .catch(() => {});
+    fetch(`/api/projects/channels?projectId=${selectedProjectId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setProjectChannels(data);
+      })
+      .catch(() => {});
     // プロジェクトの readme を反映
     const p = projects.find((pr) => pr.id === selectedProjectId);
     setReadme(p?.readme || '');
     setEditingReadme(false);
   }, [selectedProjectId, projects]);
+
+  // 全プロジェクトチャネル紐付けを取得（重複チェック用）
+  useEffect(() => {
+    fetch('/api/projects/channels')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setAllProjectChannels(data);
+      })
+      .catch(() => {});
+  }, [projectChannels]);
 
   // プロジェクト作成
   const createProject = async () => {
@@ -434,6 +458,47 @@ export default function MemoPage() {
     }).catch(() => {});
   };
 
+  // チャネル紐付け追加
+  const addChannel = async (channelId: string, channelName: string) => {
+    if (!selectedProjectId) return;
+    try {
+      const res = await fetch('/api/projects/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selectedProjectId, channelId, channelName }),
+      });
+      if (res.ok) {
+        const pc = await res.json();
+        setProjectChannels((prev) => [...prev, pc]);
+        setShowChannelPicker(false);
+        setChannelSearchQuery('');
+      } else if (res.status === 409) {
+        alert('このチャネルは既に別のプロジェクトに紐付けられています');
+      }
+    } catch { /* ignore */ }
+  };
+
+  // チャネル紐付け解除
+  const removeChannel = async (channelId: string) => {
+    if (!selectedProjectId) return;
+    try {
+      await fetch(`/api/projects/channels?projectId=${selectedProjectId}&channelId=${channelId}`, { method: 'DELETE' });
+      setProjectChannels((prev) => prev.filter((pc) => pc.channelId !== channelId));
+    } catch { /* ignore */ }
+  };
+
+  // チャネルピッカーを開く（Slack チャネル一覧取得）
+  const openChannelPicker = async () => {
+    setShowChannelPicker(true);
+    try {
+      const res = await fetch('/api/slack/channels');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setAvailableChannels(data);
+      }
+    } catch { /* ignore */ }
+  };
+
   // ファイルサイズ表示
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -467,7 +532,7 @@ export default function MemoPage() {
           </svg>
         </Link>
         <h1 className="text-sm font-bold text-white tracking-wide">
-          プロジェクトメモ
+          プロジェクト
         </h1>
       </header>
 
@@ -929,6 +994,40 @@ export default function MemoPage() {
                 className="bg-[#1A1D27] flex flex-col overflow-hidden shrink-0"
                 style={{ width: rightPanelWidth }}
               >
+                {/* チャネル紐付け */}
+                <div className="px-4 py-2.5 border-b border-white/5 shrink-0">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">紐付きチャネル</span>
+                    <button
+                      onClick={openChannelPicker}
+                      className="text-[#4A9EFF] hover:text-[#4A9EFF]/80 transition text-xs"
+                      title="チャネルを追加"
+                    >
+                      +
+                    </button>
+                  </div>
+                  {projectChannels.length === 0 ? (
+                    <div className="text-[10px] text-gray-600">チャネル未設定</div>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {projectChannels.map((pc) => (
+                        <span
+                          key={pc.id}
+                          className="group inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#4A9EFF]/10 text-[10px] text-[#4A9EFF]"
+                        >
+                          #{pc.channelName}
+                          <button
+                            onClick={() => removeChannel(pc.channelId)}
+                            className="text-gray-600 hover:text-[#E74C3C] opacity-0 group-hover:opacity-100 transition"
+                          >
+                            &#10005;
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* 概要ヘッダー */}
                 <div className="px-4 py-2.5 border-b border-white/5 flex items-center justify-between shrink-0">
                   <span className="text-xs text-gray-400 uppercase tracking-wider font-semibold">概要 (README)</span>
@@ -1194,6 +1293,80 @@ export default function MemoPage() {
           </div>
         );
       })()}
+
+      {/* チャネル選択モーダル */}
+      {showChannelPicker && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="w-[400px] max-h-[60vh] bg-[#1A1D27] rounded-lg border border-white/10 shadow-2xl flex flex-col">
+            <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between shrink-0">
+              <span className="text-sm text-gray-300">チャネルを紐付け</span>
+              <button
+                onClick={() => { setShowChannelPicker(false); setChannelSearchQuery(''); }}
+                className="text-gray-500 hover:text-gray-300 transition"
+              >
+                &#10005;
+              </button>
+            </div>
+
+            <div className="px-3 py-2 border-b border-white/5 shrink-0">
+              <input
+                type="text"
+                value={channelSearchQuery}
+                onChange={(e) => setChannelSearchQuery(e.target.value)}
+                placeholder="チャネル名で検索..."
+                className="w-full bg-[#0F1117] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-[#4A9EFF]"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+              {availableChannels.length === 0 && (
+                <div className="text-xs text-gray-600 text-center py-4">チャネルを読み込み中...</div>
+              )}
+              {availableChannels
+                .filter((ch) => ch.name.toLowerCase().includes(channelSearchQuery.toLowerCase()))
+                .map((ch) => {
+                  const assigned = allProjectChannels.find((pc) => pc.channelId === ch.id);
+                  const isCurrentProject = projectChannels.some((pc) => pc.channelId === ch.id);
+                  return (
+                    <button
+                      key={ch.id}
+                      onClick={() => !assigned && addChannel(ch.id, ch.name)}
+                      disabled={!!assigned}
+                      className={`w-full text-left px-3 py-2 rounded text-xs transition flex items-center justify-between ${
+                        assigned
+                          ? 'text-gray-600 cursor-not-allowed'
+                          : 'text-gray-300 hover:bg-white/5 cursor-pointer'
+                      }`}
+                    >
+                      <span>
+                        <span className="text-[#4A9EFF]">#</span> {ch.name}
+                        {ch.type === 'dm' && <span className="text-gray-600 ml-1">(DM)</span>}
+                        {ch.type === 'group_dm' && <span className="text-gray-600 ml-1">(グループDM)</span>}
+                      </span>
+                      {isCurrentProject ? (
+                        <span className="text-[10px] text-[#2ECC71]">紐付け済み</span>
+                      ) : assigned ? (
+                        <span className="text-[10px] text-gray-600">
+                          他プロジェクト使用中
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+            </div>
+
+            <div className="px-4 py-2 border-t border-white/5 shrink-0">
+              <button
+                onClick={() => { setShowChannelPicker(false); setChannelSearchQuery(''); }}
+                className="px-3 py-1.5 text-[10px] rounded bg-white/5 text-gray-400 hover:bg-white/10 transition"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* タスクメッセージ選択モーダル */}
       {showTaskPicker && (
