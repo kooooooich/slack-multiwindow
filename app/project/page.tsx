@@ -55,6 +55,7 @@ export default function ProjectPage() {
   // ドキュメント管理
   const [documents, setDocuments] = useState<ProjectDocument[]>([]);
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [uploadDocError, setUploadDocError] = useState<string | null>(null);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [editingDocDesc, setEditingDocDesc] = useState('');
   const [deleteDocConfirmId, setDeleteDocConfirmId] = useState<string | null>(null);
@@ -408,7 +409,14 @@ export default function ProjectPage() {
     const file = e.target.files?.[0];
     if (!file || !selectedProjectId) return;
     setUploadingDoc(true);
+    setUploadDocError(null);
     try {
+      // クライアント側サイズチェック
+      const maxSize = 30 * 1024 * 1024;
+      if (file.size > maxSize) {
+        setUploadDocError(`ファイルサイズが大きすぎます（${(file.size / 1024 / 1024).toFixed(1)}MB）。30MB以下のファイルを選択してください。`);
+        return;
+      }
       const formData = new FormData();
       formData.append('file', file);
       formData.append('projectId', selectedProjectId);
@@ -419,8 +427,13 @@ export default function ProjectPage() {
       if (res.ok) {
         const doc = await res.json();
         setDocuments((prev) => [doc, ...prev]);
+      } else {
+        const data = await res.json().catch(() => null);
+        setUploadDocError(data?.error || `アップロードに失敗しました（${res.status}）`);
       }
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      setUploadDocError(`アップロードに失敗しました: ${err instanceof Error ? err.message : 'ネットワークエラー'}`);
+    } finally {
       setUploadingDoc(false);
       e.target.value = '';
     }
@@ -854,10 +867,18 @@ export default function ProjectPage() {
                         onChange={handleDocUpload}
                         disabled={uploadingDoc}
                         className="hidden"
-                        accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.odt,.odp,.ods"
+                        accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.json,.odt,.odp,.ods"
                       />
                     </label>
                   </div>
+
+                  {uploadDocError && (
+                    <div className="mb-2 px-2.5 py-1.5 bg-red-500/15 border border-red-500/30 rounded text-[11px] text-red-400 flex items-start gap-1.5">
+                      <span className="shrink-0 mt-px">&#9888;</span>
+                      <span className="flex-1">{uploadDocError}</span>
+                      <button onClick={() => setUploadDocError(null)} className="shrink-0 text-red-400/60 hover:text-red-400">&#10005;</button>
+                    </div>
+                  )}
 
                   {documents.length > 0 && (
                     <div className="space-y-1 max-h-40 overflow-y-auto">

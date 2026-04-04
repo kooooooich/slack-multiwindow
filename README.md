@@ -31,7 +31,9 @@ Slackの複数ワークスペースにまたがるメンション・スレッド
 - **メモ保存**: タスクウィンドウ・チャネルビュー両方からメッセージをプロジェクトメモに保存
 - **プロジェクト管理**: プロジェクトの作成・名前変更・削除
 - **メモ編集**: 保存したメモのテキスト・ノートをインライン編集
-- **AI分析**: Claude APIによるメモの要約・Q&A機能
+- **ドキュメント添付**: プロジェクトにファイルをアップロード（最大30MB、PDF/DOCX/XLSX/PPTX/MD/TXT等対応）
+- **テキスト抽出**: アップロードされたドキュメントからテキストを自動抽出（AI分析のコンテキストに利用）
+- **AI分析**: Claude APIによるメモ・ドキュメントの要約・Q&A機能
 
 ### 検索・その他
 - **メッセージ検索**: タスク横断のキーワード検索（ステータスフィルタ対応）
@@ -47,6 +49,7 @@ Slackの複数ワークスペースにまたがるメンション・スレッド
 - **Backend**: Next.js API Routes, SQLite (better-sqlite3)
 - **Slack連携**: @slack/bolt (Socket Mode / Events API)
 - **AI**: Anthropic Claude API
+- **ドキュメント処理**: pdf-parse, officeparser（PDF/DOCX/XLSX/PPTX テキスト抽出）
 - **リアルタイム通信**: SSE (Server-Sent Events)
 
 ## ローカル開発
@@ -181,6 +184,13 @@ https://your-app.railway.app/api/slack/events
 | `APP_PASSWORD` | No | チーム認証パスワード（未設定時は認証なし） |
 | `PORT` | No | サーバーポート（デフォルト: 3000） |
 
+## ファイルアップロード
+
+- プロジェクトドキュメントは `uploads/projects/{projectId}/` に保存
+- アップロード上限: **30MB**（`next.config.ts` の `proxyClientMaxBodySize` で設定）
+- 対応形式: PDF, DOCX, XLSX, PPTX, ODT, ODP, ODS, MD, TXT, CSV, JSON
+- アップロード時にテキストを自動抽出し、AI分析のコンテキストとして利用
+
 ## プロジェクト構成
 
 ```
@@ -199,7 +209,8 @@ slack-multiwindow/
 │   │   ├── health/            # ヘルスチェック
 │   │   ├── projects/
 │   │   │   ├── route.ts       # プロジェクトCRUD
-│   │   │   └── memos/         # プロジェクトメモCRUD
+│   │   │   ├── memos/         # プロジェクトメモCRUD
+│   │   │   └── documents/     # ドキュメントアップロード・管理（最大30MB）
 │   │   ├── slack/
 │   │   │   ├── channels/      # チャネル一覧・メンバー・メッセージ取得
 │   │   │   ├── debug/         # デバッグ用
@@ -215,8 +226,8 @@ slack-multiwindow/
 │   │   │   ├── route.ts       # タスクCRUD
 │   │   │   └── search/        # タスク検索
 │   │   └── workspaces/        # ワークスペースCRUD・接続テスト
-│   ├── memo/
-│   │   └── page.tsx           # プロジェクトメモ画面
+│   ├── project/
+│   │   └── page.tsx           # プロジェクト管理画面（メモ・ドキュメント・AI分析）
 │   ├── globals.css
 │   ├── layout.tsx
 │   └── page.tsx               # メイン画面（タスク・チャネル）
@@ -242,6 +253,7 @@ slack-multiwindow/
 │   ├── auth.ts                # NextAuth設定
 │   ├── bolt-server.ts         # Slack Bolt サーバー
 │   ├── db.ts                  # SQLiteデータベース操作
+│   ├── document-extractor.ts  # ドキュメントテキスト抽出（PDF/Office/テキスト）
 │   ├── emoji.ts               # 絵文字ユーティリティ
 │   ├── mrkdwn.ts              # Slack mrkdwn パーサー・絵文字マッピング
 │   ├── slack.ts               # Slack APIユーティリティ

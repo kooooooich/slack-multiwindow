@@ -38,11 +38,11 @@ export async function extractText(filePath: string): Promise<string> {
 
 async function extractPdfText(filePath: string): Promise<string> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string }>;
+    // pdf-parse v1 はデフォルトエクスポート（関数）
+    const pdfParse = (await import('pdf-parse')).default;
     const buffer = fs.readFileSync(filePath);
-    const data = await pdfParse(buffer);
-    return data.text || '';
+    const result = await pdfParse(buffer);
+    return result.text || '';
   } catch (err) {
     console.error('[DocumentExtractor] PDF extraction failed:', err);
     return '[PDF テキスト抽出エラー]';
@@ -69,6 +69,7 @@ export function getFileTypeIcon(mimeType: string): string {
   if (mimeType.includes('word') || mimeType.includes('.document')) return '📝';
   if (mimeType.includes('sheet') || mimeType.includes('excel')) return '📊';
   if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📑';
+  if (mimeType === 'application/json') return '🔧';
   if (mimeType.startsWith('text/')) return '📃';
   return '📎';
 }

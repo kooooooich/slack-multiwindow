@@ -9,8 +9,8 @@ export const dynamic = 'force-dynamic';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads', 'projects');
 
-// 最大 20MB
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
+// 最大 30MB
+const MAX_FILE_SIZE = 30 * 1024 * 1024;
 
 function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) {
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: 'ファイルサイズは20MB以下にしてください' }, { status: 400 });
+      return NextResponse.json({ error: 'ファイルサイズは30MB以下にしてください' }, { status: 400 });
     }
 
     // ファイル保存
@@ -84,7 +84,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     console.error('Document upload failed:', error);
-    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Upload failed';
+    return NextResponse.json({ error: `アップロードに失敗しました: ${message}` }, { status: 500 });
   }
 }
 

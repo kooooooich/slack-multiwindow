@@ -22,7 +22,7 @@
     "next": "16.1.6",
     "next-auth": "^5.0.0-beta.30",
     "officeparser": "^6.0.4",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "^1.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
